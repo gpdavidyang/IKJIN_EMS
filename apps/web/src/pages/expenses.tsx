@@ -27,6 +27,31 @@ const ExpensesPage = () => {
   const [dateTo, setDateTo] = useState<string>("");
   const [amountMin, setAmountMin] = useState<string>("");
   const [amountMax, setAmountMax] = useState<string>("");
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const buildQueryString = () => {
+    const params = new URLSearchParams();
+    if (siteFilter !== "ALL") {
+      params.set("siteId", siteFilter);
+    }
+    if (statusFilter !== "ALL") {
+      params.append("status", statusFilter);
+    }
+    if (dateFrom) {
+      params.set("dateFrom", dateFrom);
+    }
+    if (dateTo) {
+      params.set("dateTo", dateTo);
+    }
+    if (amountMin) {
+      params.set("amountMin", amountMin);
+    }
+    if (amountMax) {
+      params.set("amountMax", amountMax);
+    }
+    return params.toString();
+  };
 
   useEffect(() => {
     const fetchExpenses = async () => {
@@ -40,27 +65,7 @@ const ExpensesPage = () => {
       setLoading(true);
       setError(null);
       try {
-        const params = new URLSearchParams();
-        if (siteFilter !== "ALL") {
-          params.set("siteId", siteFilter);
-        }
-        if (statusFilter !== "ALL") {
-          params.append("status", statusFilter);
-        }
-        if (dateFrom) {
-          params.set("dateFrom", dateFrom);
-        }
-        if (dateTo) {
-          params.set("dateTo", dateTo);
-        }
-        if (amountMin) {
-          params.set("amountMin", amountMin);
-        }
-        if (amountMax) {
-          params.set("amountMax", amountMax);
-        }
-
-        const query = params.toString();
+        const query = buildQueryString();
         const data = await apiClient.get<Array<any>>(query ? `/expenses?${query}` : "/expenses");
         setRows(
           data.map((item) => ({
@@ -82,6 +87,29 @@ const ExpensesPage = () => {
     };
     void fetchExpenses();
   }, [token, authLoading, siteFilter, statusFilter, dateFrom, dateTo, amountMin, amountMax]);
+
+  const handleDownload = async () => {
+    if (!token) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const query = buildQueryString();
+      const path = query ? `/expenses/export?${query}` : "/expenses/export";
+      const { blob, filename } = await apiClient.download(path);
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename ?? "expenses.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : "Excel 파일을 내려받지 못했습니다.");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const sites = useMemo(() => {
     const unique = new Set<string>();
@@ -173,17 +201,28 @@ const ExpensesPage = () => {
               필터 초기화
             </button>
           </div>
-          {user && ["submitter", "site_manager", "hq_admin"].includes(user.role) ? (
-            <Link
-              className="inline-flex items-center gap-2 rounded-md bg-[#0F4C81] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#0c3b64]"
-              href="/expenses/new"
+          <div className="flex items-center gap-2">
+            <button
+              className="rounded-md border border-[#E4E7EB] px-3 py-2 text-sm text-[#0F4C81] transition hover:bg-[#0F4C8110] disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => void handleDownload()}
+              disabled={downloading || !token || loading}
+              type="button"
             >
-              <span className="text-base leading-none">＋</span>
-              경비 작성
-            </Link>
-          ) : null}
+              {downloading ? "다운로드 중..." : "Excel 다운로드"}
+            </button>
+            {user && ["submitter", "site_manager", "hq_admin"].includes(user.role) ? (
+              <Link
+                className="inline-flex items-center gap-2 rounded-md bg-[#0F4C81] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#0c3b64]"
+                href="/expenses/new"
+              >
+                <span className="text-base leading-none">＋</span>
+                경비 작성
+              </Link>
+            ) : null}
+          </div>
         </div>
         {error ? <p className="text-sm text-[#D64545]">{error}</p> : null}
+        {downloadError ? <p className="text-sm text-[#D64545]">{downloadError}</p> : null}
         {loading ? (
           <p className="text-sm text-[#3E4C59]">로딩 중...</p>
         ) : (

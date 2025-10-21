@@ -1,0 +1,11 @@
+{
+  "functions": {
+    "api/index.ts": {
+      "runtime": "nodejs20.x",
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
+  "buildCommand": "pnpm install && pnpm --filter @ikjin/api build && pnpm --filter @ikjin/api prisma migrate deploy",
+  "installCommand": "pnpm install"
+}

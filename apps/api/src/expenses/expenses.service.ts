@@ -1,5 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { ApprovalAction, ExpenseStatus, Prisma } from "@prisma/client";
+import type { Express } from "express";
+import { promises as fs } from "fs";
+import path from "path";
+import { randomUUID } from "crypto";
+import ExcelJS from "exceljs";
+import { ApprovalAction, ExpenseStatus, Prisma, ExpenseAttachment as ExpenseAttachmentModel } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { CreateExpenseDto } from "./dto/create-expense.dto";
@@ -31,14 +36,45 @@ const expenseDetailInclude = {
         select: { id: true, fullName: true, email: true }
       }
     }
+  },
+  attachments: {
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      originalName: true,
+      mimeType: true,
+      size: true,
+      createdAt: true,
+      filePath: true
+    }
   }
 } satisfies Prisma.ExpenseInclude;
 
 type ExpenseWithRelations = Prisma.ExpenseGetPayload<{ include: typeof expenseDetailInclude }>;
 
+const ATTACHMENTS_ROOT =
+  process.env.EXPENSE_ATTACHMENTS_DIR ?? path.resolve(process.cwd(), "uploads", "expenses");
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_ATTACHMENTS_PER_REQUEST = 5;
+
+const MIME_FALLBACK = "application/octet-stream";
+
+async function ensureDirectory(dirPath: string) {
+  await fs.mkdir(dirPath, { recursive: true });
+}
+
+function sanitizeFilename(originalName: string) {
+  const base = originalName.replace(/[/\\?%*:|"<>]/g, "_");
+  return base || "attachment";
+}
+
 @Injectable()
 export class ExpensesService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private get attachmentsRoot() {
+    return ATTACHMENTS_ROOT;
+  }
 
   private readonly editableStatuses: ExpenseStatus[] = [
     ExpenseStatus.DRAFT,
@@ -92,47 +128,7 @@ export class ExpensesService {
   }
 
   async findAll(user: AuthenticatedUser, query: ListExpenseDto) {
-    const filters: Prisma.ExpenseWhereInput = {};
-
-    if (user.role === "submitter") {
-      filters.userId = user.id;
-    } else if (user.role === "site_manager") {
-      filters.siteId = user.siteId ?? undefined;
-    } else if (user.role !== "hq_admin") {
-      filters.siteId = user.siteId ?? undefined;
-    }
-
-    if (query.siteId) {
-      filters.siteId = query.siteId;
-    }
-
-    if (query.status && query.status.length > 0) {
-      filters.status = {
-        in: query.status
-      };
-    }
-
-    if (query.dateFrom || query.dateTo) {
-      filters.usageDate = {};
-      if (query.dateFrom) {
-        filters.usageDate.gte = new Date(query.dateFrom);
-      }
-      if (query.dateTo) {
-        const end = new Date(query.dateTo);
-        end.setHours(23, 59, 59, 999);
-        filters.usageDate.lte = end;
-      }
-    }
-
-    if (query.amountMin !== undefined || query.amountMax !== undefined) {
-      filters.totalAmount = {};
-      if (query.amountMin !== undefined) {
-        filters.totalAmount.gte = new Prisma.Decimal(query.amountMin);
-      }
-      if (query.amountMax !== undefined) {
-        filters.totalAmount.lte = new Prisma.Decimal(query.amountMax);
-      }
-    }
+    const filters = this.buildFilters(user, query);
 
     return this.prisma.expense.findMany({
       where: filters,
@@ -506,6 +502,281 @@ export class ExpensesService {
     return this.toExpenseResponse(updated, user);
   }
 
+  async exportExpenses(user: AuthenticatedUser, query: ListExpenseDto) {
+    const filters = this.buildFilters(user, query);
+    const expenses = await this.prisma.expense.findMany({
+      where: filters,
+      include: {
+        site: {
+          select: { name: true, code: true }
+        },
+        user: {
+          select: { fullName: true, email: true }
+        },
+        items: {
+          select: { category: true, amount: true }
+        },
+        approvals: {
+          orderBy: { actedAt: "asc" },
+          select: {
+            step: true,
+            action: true,
+            actedAt: true,
+            approver: {
+              select: { fullName: true, email: true }
+            }
+          }
+        }
+      },
+      orderBy: {
+        updatedAt: "desc"
+      }
+    });
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Expenses");
+
+    worksheet.columns = [
+      { header: "경비 ID", key: "id", width: 36 },
+      { header: "상태", key: "status", width: 18 },
+      { header: "현장", key: "site", width: 24 },
+      { header: "제출자", key: "submitter", width: 24 },
+      { header: "총 금액", key: "amount", width: 16 },
+      { header: "사용일", key: "usageDate", width: 16 },
+      { header: "업데이트", key: "updatedAt", width: 20 },
+      { header: "항목 요약", key: "items", width: 42 },
+      { header: "승인 이력", key: "approvals", width: 42 }
+    ];
+
+    for (const expense of expenses) {
+      const itemsSummary = expense.items
+        .map((item) => `${item.category}: ${Number(item.amount)}`)
+        .join("\n");
+      const approvalsSummary = expense.approvals
+        .map((approval) => {
+          const approver = approval.approver?.fullName ?? approval.approver?.email ?? "-";
+          const acted = approval.actedAt ? approval.actedAt.toISOString().split("T")[0] : "대기";
+          return `Step ${approval.step} ${approval.action} · ${approver} (${acted})`;
+        })
+        .join("\n");
+
+      worksheet.addRow({
+        id: expense.id,
+        status: expense.status,
+        site: expense.site?.name ?? expense.site?.code ?? "-",
+        submitter: expense.user?.fullName ?? expense.user?.email ?? "-",
+        amount: Number(expense.totalAmount),
+        usageDate: expense.usageDate.toISOString().split("T")[0],
+        updatedAt: expense.updatedAt.toISOString().split("T")[0],
+        items: itemsSummary,
+        approvals: approvalsSummary
+      });
+    }
+
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getColumn(5).numFmt = "#,##0";
+
+    const arrayBuffer = await workbook.xlsx.writeBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const timestamp = new Date();
+    const filename = `expenses_${timestamp.toISOString().replace(/[-:]/g, "").slice(0, 15)}.xlsx`;
+
+    return { buffer, filename };
+  }
+
+  async addAttachments(user: AuthenticatedUser, expenseId: string, files: Express.Multer.File[]) {
+    if (!files || files.length === 0) {
+      return [];
+    }
+    if (files.length > MAX_ATTACHMENTS_PER_REQUEST) {
+      throw new BadRequestException(`한 번에 최대 ${MAX_ATTACHMENTS_PER_REQUEST}개 파일까지 업로드할 수 있습니다.`);
+    }
+
+    const expense = await this.prisma.expense.findUnique({
+      where: { id: expenseId },
+      select: { id: true, userId: true, siteId: true }
+    });
+
+    if (!expense) {
+      throw new NotFoundException("경비를 찾을 수 없습니다.");
+    }
+
+    this.ensureAttachmentWriteAccess(user, expense);
+
+    await ensureDirectory(this.attachmentsRoot);
+    const expenseDir = path.join(this.attachmentsRoot, expenseId);
+    await ensureDirectory(expenseDir);
+
+    const created: ExpenseAttachmentModel[] = [];
+
+    for (const file of files) {
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        throw new BadRequestException(
+          `파일 '${file.originalname}'의 크기가 제한(10MB)을 초과했습니다.`
+        );
+      }
+      const safeName = sanitizeFilename(file.originalname);
+      const uniqueName = `${randomUUID()}-${safeName}`;
+      const relativePath = path.posix.join(expenseId, uniqueName);
+      const absolutePath = this.resolveAttachmentPath(relativePath);
+
+      await ensureDirectory(path.dirname(absolutePath));
+      if (!file.buffer) {
+        throw new BadRequestException("업로드된 파일 데이터를 읽을 수 없습니다.");
+      }
+      await fs.writeFile(absolutePath, file.buffer);
+
+      const attachment = await this.prisma.expenseAttachment.create({
+        data: {
+          expenseId,
+          filePath: relativePath,
+          originalName: file.originalname,
+          mimeType: file.mimetype || MIME_FALLBACK,
+          size: file.size
+        }
+      });
+      created.push(attachment);
+    }
+
+    return created.map((attachment) => this.toAttachmentResponse(attachment));
+  }
+
+  async deleteAttachment(user: AuthenticatedUser, expenseId: string, attachmentId: string) {
+    const attachment = await this.prisma.expenseAttachment.findUnique({
+      where: { id: attachmentId },
+      include: {
+        expense: {
+          select: {
+            id: true,
+            userId: true,
+            siteId: true
+          }
+        }
+      }
+    });
+
+    if (!attachment || attachment.expenseId !== expenseId) {
+      throw new NotFoundException("첨부 파일을 찾을 수 없습니다.");
+    }
+
+    this.ensureAttachmentWriteAccess(user, attachment.expense);
+
+    await this.prisma.expenseAttachment.delete({
+      where: { id: attachmentId }
+    });
+
+    const absolutePath = this.resolveAttachmentPath(attachment.filePath);
+    await fs.unlink(absolutePath).catch(() => undefined);
+
+    return this.toAttachmentResponse(attachment);
+  }
+
+  async getAttachmentForDownload(user: AuthenticatedUser, expenseId: string, attachmentId: string) {
+    const attachment = await this.prisma.expenseAttachment.findUnique({
+      where: { id: attachmentId },
+      include: {
+        expense: {
+          select: {
+            id: true,
+            userId: true,
+            siteId: true
+          }
+        }
+      }
+    });
+
+    if (!attachment || attachment.expenseId !== expenseId) {
+      throw new NotFoundException("첨부 파일을 찾을 수 없습니다.");
+    }
+
+    this.ensureReadable(user, {
+      userId: attachment.expense.userId,
+      siteId: attachment.expense.siteId
+    });
+
+    const absolutePath = this.resolveAttachmentPath(attachment.filePath);
+    try {
+      await fs.access(absolutePath);
+    } catch {
+      throw new NotFoundException("첨부 파일을 찾을 수 없습니다.");
+    }
+
+    return {
+      metadata: this.toAttachmentResponse(attachment),
+      path: absolutePath
+    };
+  }
+
+  private buildFilters(user: AuthenticatedUser, query: ListExpenseDto): Prisma.ExpenseWhereInput {
+    const filters: Prisma.ExpenseWhereInput = {};
+
+    if (user.role === "submitter") {
+      filters.userId = user.id;
+    } else if (user.role === "site_manager") {
+      filters.siteId = user.siteId ?? undefined;
+    } else if (user.role !== "hq_admin") {
+      filters.siteId = user.siteId ?? undefined;
+    }
+
+    if (query.siteId) {
+      filters.siteId = query.siteId;
+    }
+
+    if (query.status && query.status.length > 0) {
+      filters.status = {
+        in: query.status
+      };
+    }
+
+    if (query.dateFrom || query.dateTo) {
+      filters.usageDate = {};
+      if (query.dateFrom) {
+        filters.usageDate.gte = new Date(query.dateFrom);
+      }
+      if (query.dateTo) {
+        const end = new Date(query.dateTo);
+        end.setHours(23, 59, 59, 999);
+        filters.usageDate.lte = end;
+      }
+    }
+
+    if (query.amountMin !== undefined || query.amountMax !== undefined) {
+      filters.totalAmount = {};
+      if (query.amountMin !== undefined) {
+        filters.totalAmount.gte = new Prisma.Decimal(query.amountMin);
+      }
+      if (query.amountMax !== undefined) {
+        filters.totalAmount.lte = new Prisma.Decimal(query.amountMax);
+      }
+    }
+
+    return filters;
+  }
+
+  private resolveAttachmentPath(relativePath: string) {
+    const normalized = path.normalize(relativePath);
+    if (normalized.startsWith("..")) {
+      throw new BadRequestException("잘못된 파일 경로입니다.");
+    }
+    return path.join(this.attachmentsRoot, normalized);
+  }
+
+  private ensureAttachmentWriteAccess(
+    user: AuthenticatedUser,
+    expense: { userId: string; siteId: string | null }
+  ) {
+    if (user.role === "hq_admin") {
+      return;
+    }
+    if (user.role === "site_manager" && user.siteId && expense.siteId === user.siteId) {
+      return;
+    }
+    if (user.role === "submitter" && expense.userId === user.id) {
+      return;
+    }
+    throw new ForbiddenException("첨부 파일을 수정할 권한이 없습니다.");
+  }
+
   private ensureReadable(user: AuthenticatedUser, expense: { userId: string; siteId: string | null }) {
     if (user.role === "submitter" && expense.userId !== user.id) {
       throw new ForbiddenException("경비에 접근할 수 없습니다.");
@@ -524,6 +795,22 @@ export class ExpensesService {
     if (!this.editableStatuses.includes(expense.status)) {
       throw new BadRequestException("현재 상태에서는 경비를 수정할 수 없습니다.");
     }
+  }
+
+  private toAttachmentResponse(attachment: {
+    id: string;
+    originalName: string;
+    mimeType: string;
+    size: number;
+    createdAt: Date;
+  }) {
+    return {
+      id: attachment.id,
+      originalName: attachment.originalName,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      createdAt: attachment.createdAt.toISOString()
+    };
   }
 
   private toExpenseResponse(expense: ExpenseWithRelations, user: AuthenticatedUser) {
@@ -559,6 +846,7 @@ export class ExpensesService {
         actedAt: approval.actedAt ? approval.actedAt.toISOString() : null,
         approver: approval.approver
       })),
+      attachments: expense.attachments.map((attachment) => this.toAttachmentResponse(attachment)),
       permissions: {
         canEdit,
         canResubmit

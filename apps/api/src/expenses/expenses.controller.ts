@@ -1,4 +1,20 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+  UseInterceptors,
+  UploadedFiles
+} from "@nestjs/common";
+import { FilesInterceptor } from "@nestjs/platform-express";
+import { createReadStream } from "fs";
+import type { Express, Response } from "express";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthenticatedUser } from "../auth/auth.types";
@@ -26,6 +42,22 @@ export class ExpensesController {
   @Roles("submitter", "site_manager", "hq_admin", "auditor")
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListExpenseDto) {
     return this.expensesService.findAll(user, query);
+  }
+
+  @Get("export")
+  @Roles("submitter", "site_manager", "hq_admin", "auditor")
+  async export(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListExpenseDto,
+    @Res() res: Response
+  ) {
+    const { buffer, filename } = await this.expensesService.exportExpenses(user, query);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.send(buffer);
   }
 
   @Get(":id")
@@ -62,6 +94,53 @@ export class ExpensesController {
   @Roles("submitter", "site_manager", "hq_admin", "auditor")
   metadata(@CurrentUser() user: AuthenticatedUser) {
     return this.expensesService.getMetadata(user);
+  }
+
+  @Post(":id/attachments")
+  @Roles("submitter", "site_manager", "hq_admin")
+  @UseInterceptors(
+    FilesInterceptor("files", 5, {
+      limits: { fileSize: 10 * 1024 * 1024 }
+    })
+  )
+  uploadAttachments(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @UploadedFiles() files: Express.Multer.File[]
+  ) {
+    return this.expensesService.addAttachments(user, id, files ?? []);
+  }
+
+  @Delete(":id/attachments/:attachmentId")
+  @Roles("submitter", "site_manager", "hq_admin")
+  deleteAttachment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Param("attachmentId") attachmentId: string
+  ) {
+    return this.expensesService.deleteAttachment(user, id, attachmentId);
+  }
+
+  @Get(":id/attachments/:attachmentId")
+  @Roles("submitter", "site_manager", "hq_admin", "auditor")
+  async downloadAttachment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Param("attachmentId") attachmentId: string,
+    @Res() res: Response
+  ) {
+    const { metadata, path } = await this.expensesService.getAttachmentForDownload(user, id, attachmentId);
+    res.setHeader("Content-Type", metadata.mimeType || "application/octet-stream");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${encodeURIComponent(metadata.originalName)}"`
+    );
+    res.setHeader("Content-Length", metadata.size.toString());
+    const stream = createReadStream(path);
+    stream.on("error", () => {
+      res.status(500).end();
+    });
+    stream.pipe(res);
   }
 
   @Patch(":id")

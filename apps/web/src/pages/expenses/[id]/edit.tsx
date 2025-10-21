@@ -1,6 +1,6 @@
 import Head from "next/head";
 import { useRouter } from "next/router";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import AppShell from "@/layout/AppShell";
 import { apiClient } from "@/lib/apiClient";
 import { useAuth } from "@/contexts/AuthContext";
@@ -44,7 +44,28 @@ interface ExpenseDetailResponse {
     vendor: string;
     description?: string | null;
   }>;
+  attachments: ExpenseAttachment[];
 }
+
+interface ExpenseAttachment {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
+const formatFileSize = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const formatAttachmentDate = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.toISOString().split("T")[0]} ${date.toTimeString().slice(0, 5)}`;
+};
 
 const EditExpensePage = () => {
   const router = useRouter();
@@ -59,6 +80,10 @@ const EditExpensePage = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [existingAttachments, setExistingAttachments] = useState<ExpenseAttachment[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
+  const canDeleteAttachments =
+    user ? ["submitter", "site_manager", "hq_admin"].includes(user.role) : false;
 
   useEffect(() => {
     if (authLoading) return;
@@ -108,6 +133,7 @@ const EditExpensePage = () => {
             description: item.description ?? ""
           }))
         );
+        setExistingAttachments(detail.attachments ?? []);
       } catch (err) {
         setError(err instanceof Error ? err.message : "경비 정보를 불러오지 못했습니다.");
       } finally {
@@ -166,6 +192,61 @@ const EditExpensePage = () => {
 
   const removeItem = (index: number) => {
     setItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const handleAttachmentSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files ? Array.from(event.target.files) : [];
+    if (files.length === 0) return;
+    if (pendingAttachments.length + files.length > 5) {
+      setError("첨부 파일은 최대 5개까지 추가할 수 있습니다.");
+      event.target.value = "";
+      return;
+    }
+    const oversized = files.find((file) => file.size > 10 * 1024 * 1024);
+    if (oversized) {
+      setError(`"${oversized.name}" 파일이 10MB 제한을 초과했습니다.`);
+      event.target.value = "";
+      return;
+    }
+    setError(null);
+    setPendingAttachments((prev) => [...prev, ...files]);
+    event.target.value = "";
+  };
+
+  const removePendingAttachment = (index: number) => {
+    setPendingAttachments((prev) => prev.filter((_, fileIndex) => fileIndex !== index));
+  };
+
+  const handleDeleteAttachment = async (attachment: ExpenseAttachment) => {
+    if (!id) return;
+    setError(null);
+    try {
+      await apiClient.delete(`/expenses/${id}/attachments/${attachment.id}`);
+      setExistingAttachments((prev) => prev.filter((item) => item.id !== attachment.id));
+      setSuccess("첨부 파일을 삭제했습니다.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "첨부 파일 삭제 중 문제가 발생했습니다.");
+    }
+  };
+
+  const handleDownloadAttachment = async (attachment: ExpenseAttachment) => {
+    if (!id) return;
+    setError(null);
+    try {
+      const { blob, filename } = await apiClient.download(
+        `/expenses/${id}/attachments/${attachment.id}`
+      );
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename ?? attachment.originalName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "첨부 파일을 내려받지 못했습니다.");
+    }
   };
 
   const validateForm = () => {
@@ -249,6 +330,27 @@ const EditExpensePage = () => {
     try {
       setSubmitting(true);
       await apiClient.patch(`/expenses/${id}`, payload);
+
+      let uploaded: ExpenseAttachment[] = [];
+      if (pendingAttachments.length > 0) {
+        const formData = new FormData();
+        pendingAttachments.forEach((file) => formData.append("files", file));
+        try {
+          uploaded = (await apiClient.upload<ExpenseAttachment[]>(`/expenses/${id}/attachments`, formData)) ?? [];
+        } catch (uploadErr) {
+          setError(
+            uploadErr instanceof Error
+              ? uploadErr.message
+              : "첨부 파일 업로드 중 문제가 발생했습니다."
+          );
+          return;
+        }
+      }
+
+      if (uploaded.length > 0) {
+        setExistingAttachments((prev) => [...prev, ...uploaded]);
+      }
+      setPendingAttachments([]);
       setSuccess("경비가 업데이트되었습니다.");
       setTimeout(() => {
         router.push(`/expenses/${id}`).catch(() => undefined);
@@ -430,6 +532,87 @@ const EditExpensePage = () => {
           >
             항목 추가
           </button>
+        </section>
+
+        <section className="space-y-4 rounded-lg border border-[#E4E7EB] bg-white p-6 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-base font-semibold text-[#0F4C81]">증빙 첨부</h2>
+            <p className="text-xs text-[#52606D]">최대 5개, 파일당 10MB 이하</p>
+          </div>
+          {existingAttachments.length > 0 ? (
+            <ul className="space-y-2 text-sm text-[#3E4C59]">
+              {existingAttachments.map((attachment) => (
+                <li
+                  key={attachment.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#E4E7EB] px-3 py-2"
+                >
+                  <div className="flex flex-col">
+                    <span className="font-medium text-[#0F4C81]">{attachment.originalName}</span>
+                    <span className="text-xs text-[#52606D]">
+                      {formatFileSize(attachment.size)} · {formatAttachmentDate(attachment.createdAt)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="text-xs text-[#0F4C81] underline"
+                      onClick={() => void handleDownloadAttachment(attachment)}
+                    >
+                      다운로드
+                    </button>
+                    {canDeleteAttachments ? (
+                      <button
+                        type="button"
+                        className="text-xs text-[#D64545] underline"
+                        onClick={() => void handleDeleteAttachment(attachment)}
+                        disabled={submitting}
+                      >
+                        삭제
+                      </button>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-[#52606D]">등록된 첨부 파일이 없습니다.</p>
+          )}
+          <div className="border-t border-dashed border-[#E4E7EB] pt-4">
+            <label className="flex flex-col gap-2 text-sm text-[#3E4C59]">
+              <span>추가 첨부</span>
+              <input
+                type="file"
+                multiple
+                onChange={handleAttachmentSelect}
+                className="rounded-md border border-dashed border-[#CBD2D9] px-3 py-2"
+              />
+            </label>
+            {pendingAttachments.length > 0 ? (
+              <ul className="mt-3 space-y-2 text-sm text-[#3E4C59]">
+                {pendingAttachments.map((file, index) => (
+                  <li
+                    key={`${file.name}-${index}`}
+                    className="flex items-center justify-between rounded-md border border-[#E4E7EB] px-3 py-2"
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-medium text-[#0F4C81]">{file.name}</span>
+                      <span className="text-xs text-[#52606D]">{formatFileSize(file.size)}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="text-xs text-[#D64545] hover:underline"
+                      onClick={() => removePendingAttachment(index)}
+                      disabled={submitting}
+                    >
+                      제거
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-sm text-[#52606D]">추가할 첨부 파일을 선택해 주세요.</p>
+            )}
+          </div>
         </section>
 
         {error ? <p className="text-sm text-[#D64545]">{error}</p> : null}

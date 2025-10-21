@@ -91,12 +91,9 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 ### 3.2 API (NestJS)
 서버리스 함수로 동작시키기 위해 아래 구성을 권장합니다.
 
-1. `@vendia/serverless-express` 및 `express` 의존성 추가:
-   ```bash
-   pnpm add -r @vendia/serverless-express express
-   ```
-2. `apps/api/src/main.ts` 로직을 재사용하는 `bootstrapServer` 헬퍼를 만들고, `api/index.ts`에서 캐싱된 핸들러를 export 합니다.
-3. `vercel.json` (프로젝트 루트 혹은 `apps/api/vercel.json`) 예시:
+1. `apps/api/src/bootstrap.ts`에서 Nest 애플리케이션을 초기화하고, `apps/api/src/serverless.ts`에 Vercel 함수를 위한 핸들러를 구현합니다.
+2. `apps/api/api/index.ts`가 `serverless.ts`의 기본 핸들러를 그대로 export 하도록 구성합니다.
+3. `apps/api/vercel.json` 예시:
    ```json
    {
      "functions": {

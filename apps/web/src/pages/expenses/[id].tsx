@@ -28,6 +28,14 @@ interface ExpenseApprovalItem {
   } | null;
 }
 
+interface ExpenseAttachment {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
 interface ExpenseDetailResponse {
   id: string;
   status: string;
@@ -49,6 +57,7 @@ interface ExpenseDetailResponse {
   updatedAt: string;
   items: ExpenseDetailItem[];
   approvals: ExpenseApprovalItem[];
+  attachments: ExpenseAttachment[];
   permissions: {
     canEdit: boolean;
     canResubmit: boolean;
@@ -89,6 +98,26 @@ const ExpenseDetailPage = () => {
   const handleEdit = () => {
     if (!expense) return;
     router.push(`/expenses/${expense.id}/edit`).catch(() => undefined);
+  };
+
+  const handleDownloadAttachment = async (attachment: ExpenseAttachment) => {
+    if (!expense) return;
+    setError(null);
+    try {
+      const { blob, filename } = await apiClient.download(
+        `/expenses/${expense.id}/attachments/${attachment.id}`
+      );
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename ?? attachment.originalName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "첨부 파일을 내려받지 못했습니다.");
+    }
   };
 
   return (
@@ -186,6 +215,36 @@ const ExpenseDetailPage = () => {
           </section>
 
           <section className="rounded-lg border border-[#E4E7EB] bg-white p-6 shadow-sm">
+            <h2 className="text-base font-semibold text-[#0F4C81]">첨부 파일</h2>
+            {expense.attachments.length === 0 ? (
+              <p className="mt-2 text-sm text-[#52606D]">등록된 첨부 파일이 없습니다.</p>
+            ) : (
+              <ul className="mt-4 space-y-2 text-sm text-[#3E4C59]">
+                {expense.attachments.map((attachment) => (
+                  <li
+                    key={attachment.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#E4E7EB] px-4 py-3"
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-medium text-[#0F4C81]">{attachment.originalName}</span>
+                      <span className="text-xs text-[#52606D]">
+                        {formatFileSize(attachment.size)} · {formatDateTime(attachment.createdAt)}
+                      </span>
+                    </div>
+                    <button
+                      className="text-xs text-[#0F4C81] underline"
+                      type="button"
+                      onClick={() => void handleDownloadAttachment(attachment)}
+                    >
+                      다운로드
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-[#E4E7EB] bg-white p-6 shadow-sm">
             <h2 className="text-base font-semibold text-[#0F4C81]">결재 이력</h2>
             {expense.approvals.length === 0 ? (
               <p className="mt-2 text-sm text-[#52606D]">아직 결재 이력이 없습니다.</p>
@@ -236,6 +295,12 @@ function formatCurrency(value: string | number) {
   const amount = typeof value === "string" ? Number(value) : value;
   if (Number.isNaN(amount)) return typeof value === "string" ? value : amount.toString();
   return amount.toLocaleString("ko-KR", { style: "currency", currency: "KRW" });
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatDate(value: string) {

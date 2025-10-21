@@ -22,5 +22,6 @@
     - [x] 감사자(Auditor) 역할 읽기 전용 접근 반영 (`apps/api/src/expenses/expenses.controller.ts`, `apps/web/src/layout/AppShell.tsx`)
     - [ ] 감사 로그 저장/조회 로직 구현 필요 (`apps/api/prisma/schema.prisma`의 `AuditLog` 미사용)
   - [ ] Excel 추출, 첨부 파일(Phase 2) 준비
-    - [ ] 경비/승인 Excel 다운로드 API 및 FE 연동 미구현
-    - [ ] 첨부 파일 업로드·저장소 연동 설계 필요
+    - [x] 경비 Excel 다운로드 API 및 FE 연동 (`apps/api/src/expenses/expenses.controller.ts`, `apps/web/src/pages/expenses.tsx`)
+    - [ ] 승인 Excel 다운로드 API 및 FE 연동 (추가 구현 필요)
+    - [x] 첨부 파일 업로드·저장소 연동 (`apps/api/src/expenses/expenses.service.ts`, `apps/web/src/pages/expenses/[id].tsx`, `apps/web/src/pages/expenses/[id]/edit.tsx`, `apps/web/src/pages/expenses/new.tsx`)

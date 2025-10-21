@@ -1,6 +1,6 @@
 import Head from "next/head";
 import { useRouter } from "next/router";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import AppShell from "@/layout/AppShell";
 import { apiClient } from "@/lib/apiClient";
 import { useAuth } from "@/contexts/AuthContext";
@@ -36,6 +36,12 @@ const statusOptions: Array<{ value: ExpenseStatusValue; label: string }> = [
   { value: "DRAFT", label: "임시 저장" }
 ];
 
+const formatFileSize = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 const NewExpensePage = () => {
   const router = useRouter();
   const { token, loading: authLoading, user } = useAuth();
@@ -53,6 +59,7 @@ const NewExpensePage = () => {
   const [metaLoading, setMetaLoading] = useState(false);
   const [categories, setCategories] = useState<Array<{ code: string; name: string }>>([]);
   const [sites, setSites] = useState<Array<{ id: string; name: string; code: string }>>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -101,6 +108,29 @@ const NewExpensePage = () => {
       return sum + parsed;
     }, 0);
   }, [items]);
+
+  const handleAttachmentSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files ? Array.from(event.target.files) : [];
+    if (files.length === 0) return;
+    if (pendingAttachments.length + files.length > 5) {
+      setError("첨부 파일은 최대 5개까지 추가할 수 있습니다.");
+      event.target.value = "";
+      return;
+    }
+    const oversized = files.find((file) => file.size > 10 * 1024 * 1024);
+    if (oversized) {
+      setError(`"${oversized.name}" 파일이 10MB 제한을 초과했습니다.`);
+      event.target.value = "";
+      return;
+    }
+    setError(null);
+    setPendingAttachments((prev) => [...prev, ...files]);
+    event.target.value = "";
+  };
+
+  const removePendingAttachment = (index: number) => {
+    setPendingAttachments((prev) => prev.filter((_, fileIndex) => fileIndex !== index));
+  };
 
   const handleFormChange = (field: keyof ExpenseFormState, value: string | undefined) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -193,21 +223,7 @@ const NewExpensePage = () => {
 
     const totalAmountValue = Number(totalAmount.toFixed(2));
 
-  const payload: {
-    status: ExpenseStatusValue;
-    totalAmount: number;
-    usageDate: string;
-    vendor: string;
-    purposeDetail: string;
-    siteId?: string;
-    items: Array<{
-      category: string;
-      amount: number;
-      usageDate: string;
-      vendor: string;
-        description?: string;
-      }>;
-    } = {
+    const payload = {
       status: form.status,
       totalAmount: totalAmountValue,
       usageDate: form.usageDate,
@@ -225,8 +241,25 @@ const NewExpensePage = () => {
 
     try {
       setSubmitting(true);
-      await apiClient.post("/expenses", payload);
+      const created = await apiClient.post<{ id: string }>("/expenses", payload);
+
+      if (pendingAttachments.length > 0) {
+        const formData = new FormData();
+        pendingAttachments.forEach((file) => formData.append("files", file));
+        try {
+          await apiClient.upload(`/expenses/${created.id}/attachments`, formData);
+        } catch (uploadErr) {
+          setError(
+            uploadErr instanceof Error
+              ? uploadErr.message
+              : "첨부 파일 업로드 중 문제가 발생했습니다."
+          );
+          return;
+        }
+      }
+
       setSuccess("경비가 저장되었습니다.");
+      setPendingAttachments([]);
       setTimeout(() => {
         router.push("/expenses").catch(() => undefined);
       }, 800);
@@ -412,6 +445,46 @@ const NewExpensePage = () => {
           >
             항목 추가
           </button>
+        </section>
+
+        <section className="space-y-4 rounded-lg border border-[#E4E7EB] bg-white p-6 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-base font-semibold text-[#0F4C81]">증빙 첨부</h2>
+            <p className="text-xs text-[#52606D]">최대 5개, 파일당 10MB 이하</p>
+          </div>
+          <label className="flex flex-col gap-2 text-sm text-[#3E4C59]">
+            <span>파일 선택</span>
+            <input
+              type="file"
+              multiple
+              onChange={handleAttachmentSelect}
+              className="rounded-md border border-dashed border-[#CBD2D9] px-3 py-2"
+            />
+          </label>
+          {pendingAttachments.length > 0 ? (
+            <ul className="space-y-2 text-sm text-[#3E4C59]">
+              {pendingAttachments.map((file, index) => (
+                <li
+                  key={`${file.name}-${index}`}
+                  className="flex items-center justify-between rounded-md border border-[#E4E7EB] px-3 py-2"
+                >
+                  <div className="flex flex-col">
+                    <span className="font-medium text-[#0F4C81]">{file.name}</span>
+                    <span className="text-xs text-[#52606D]">{formatFileSize(file.size)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs text-[#D64545] hover:underline"
+                    onClick={() => removePendingAttachment(index)}
+                  >
+                    삭제
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-[#52606D]">선택된 첨부 파일이 없습니다.</p>
+          )}
         </section>
 
         {error ? <p className="text-sm text-[#D64545]">{error}</p> : null}

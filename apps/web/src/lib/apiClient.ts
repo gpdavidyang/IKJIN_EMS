@@ -51,6 +51,10 @@ export class ApiClient {
     this.token = options?.token;
   }
 
+  getBaseUrl() {
+    return this.baseUrl;
+  }
+
   setToken(token?: string | null) {
     this.token = token ?? undefined;
   }
@@ -95,12 +99,65 @@ export class ApiClient {
     return (await response.json()) as T;
   }
 
-  private withAuth() {
-    return this.token
-      ? {
-          Authorization: `Bearer ${this.token}`
-        }
-      : {};
+  async delete(path: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: "DELETE",
+      headers: this.withAuth()
+    });
+    if (!response.ok) {
+      throw new Error(await this.buildErrorMessage(response));
+    }
+  }
+
+  async upload<T>(path: string, formData: FormData, options?: { method?: "POST" | "PUT" | "PATCH" }) {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: options?.method ?? "POST",
+      headers: this.withAuth(),
+      body: formData
+    });
+    if (!response.ok) {
+      throw new Error(await this.buildErrorMessage(response));
+    }
+    try {
+      return (await response.json()) as T;
+    } catch {
+      return undefined as T;
+    }
+  }
+
+  async download(
+    path: string,
+    options?: { method?: string; body?: unknown }
+  ): Promise<{ blob: Blob; filename?: string; contentType: string }> {
+    const headers: Record<string, string> = { ...this.withAuth() };
+    const init: RequestInit = {
+      method: options?.method ?? "GET",
+      headers
+    };
+    if (options?.body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(options.body);
+    }
+
+    const response = await fetch(`${this.baseUrl}${path}`, init);
+    if (!response.ok) {
+      throw new Error(await this.buildErrorMessage(response));
+    }
+    const blob = await response.blob();
+    const contentDisposition = response.headers.get("content-disposition");
+    const filename = this.extractFilename(contentDisposition);
+    const contentType = response.headers.get("content-type") ?? "application/octet-stream";
+    return { blob, filename, contentType };
+  }
+
+  private withAuth(): Record<string, string> {
+    if (!this.token) {
+      return {};
+    }
+
+    return {
+      Authorization: `Bearer ${this.token}`
+    };
   }
 
   private async buildErrorMessage(response: Response) {
@@ -126,6 +183,17 @@ export class ApiClient {
       } catch {
         return fallback;
       }
+    }
+  }
+
+  private extractFilename(disposition: string | null) {
+    if (!disposition) return undefined;
+    const filenameMatch = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition);
+    if (!filenameMatch) return undefined;
+    try {
+      return decodeURIComponent(filenameMatch[1].replace(/"/g, ""));
+    } catch {
+      return filenameMatch[1];
     }
   }
 }

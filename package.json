@@ -9,6 +9,9 @@
     "dev": "pnpm -r --parallel dev",
     "seed": "pnpm --filter @ikjin/api exec ts-node --project tsconfig.seed.json --transpile-only ../../tools/scripts/seed.ts"
   },
+  "prisma": {
+    "schema": "apps/api/prisma/schema.prisma"
+  },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=8.0.0"
