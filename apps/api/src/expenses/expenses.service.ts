@@ -1,0 +1,568 @@
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { ApprovalAction, ExpenseStatus, Prisma } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { AuthenticatedUser } from "../auth/auth.types";
+import { CreateExpenseDto } from "./dto/create-expense.dto";
+import { ListExpenseDto } from "./dto/list-expense.dto";
+import { ApproveExpenseDto } from "./dto/approve-expense.dto";
+import { RejectExpenseDto } from "./dto/reject-expense.dto";
+import { EXPENSE_CATEGORIES } from "./expenses.constants";
+import { UpdateExpenseDto } from "./dto/update-expense.dto";
+
+const expenseDetailInclude = {
+  site: {
+    select: { id: true, code: true, name: true }
+  },
+  user: {
+    select: { id: true, fullName: true, email: true }
+  },
+  items: {
+    orderBy: { usageDate: "asc" }
+  },
+  approvals: {
+    orderBy: { actedAt: "asc" },
+    select: {
+      id: true,
+      step: true,
+      action: true,
+      comment: true,
+      actedAt: true,
+      approver: {
+        select: { id: true, fullName: true, email: true }
+      }
+    }
+  }
+} satisfies Prisma.ExpenseInclude;
+
+type ExpenseWithRelations = Prisma.ExpenseGetPayload<{ include: typeof expenseDetailInclude }>;
+
+@Injectable()
+export class ExpensesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  private readonly editableStatuses: ExpenseStatus[] = [
+    ExpenseStatus.DRAFT,
+    ExpenseStatus.REJECTED_SITE,
+    ExpenseStatus.REJECTED_HQ
+  ];
+
+  private readonly resubmittableStatuses: ExpenseStatus[] = [
+    ExpenseStatus.DRAFT,
+    ExpenseStatus.REJECTED_SITE,
+    ExpenseStatus.REJECTED_HQ
+  ];
+
+  async create(user: AuthenticatedUser, dto: CreateExpenseDto) {
+    const targetSiteId = dto.siteId ?? user.siteId;
+
+    if (!targetSiteId) {
+      throw new Error("현장 정보가 필요합니다.");
+    }
+
+    const status = dto.status ?? ExpenseStatus.PENDING_SITE;
+
+    const expense = await this.prisma.expense.create({
+      data: {
+        userId: user.id,
+        siteId: targetSiteId,
+        status,
+        totalAmount: new Prisma.Decimal(dto.totalAmount),
+        usageDate: new Date(dto.usageDate),
+        vendor: dto.vendor,
+        purposeDetail: dto.purposeDetail,
+        items: {
+          createMany: {
+            data: dto.items.map((item) => ({
+              category: item.category,
+              amount: new Prisma.Decimal(item.amount),
+              usageDate: new Date(item.usageDate),
+              vendor: item.vendor,
+              description: item.description ?? null
+            }))
+          }
+        }
+      },
+      include: {
+        items: true,
+        site: true
+      }
+    });
+
+    return expense;
+  }
+
+  async findAll(user: AuthenticatedUser, query: ListExpenseDto) {
+    const filters: Prisma.ExpenseWhereInput = {};
+
+    if (user.role === "submitter") {
+      filters.userId = user.id;
+    } else if (user.role === "site_manager") {
+      filters.siteId = user.siteId ?? undefined;
+    } else if (user.role !== "hq_admin") {
+      filters.siteId = user.siteId ?? undefined;
+    }
+
+    if (query.siteId) {
+      filters.siteId = query.siteId;
+    }
+
+    if (query.status && query.status.length > 0) {
+      filters.status = {
+        in: query.status
+      };
+    }
+
+    if (query.dateFrom || query.dateTo) {
+      filters.usageDate = {};
+      if (query.dateFrom) {
+        filters.usageDate.gte = new Date(query.dateFrom);
+      }
+      if (query.dateTo) {
+        const end = new Date(query.dateTo);
+        end.setHours(23, 59, 59, 999);
+        filters.usageDate.lte = end;
+      }
+    }
+
+    if (query.amountMin !== undefined || query.amountMax !== undefined) {
+      filters.totalAmount = {};
+      if (query.amountMin !== undefined) {
+        filters.totalAmount.gte = new Prisma.Decimal(query.amountMin);
+      }
+      if (query.amountMax !== undefined) {
+        filters.totalAmount.lte = new Prisma.Decimal(query.amountMax);
+      }
+    }
+
+    return this.prisma.expense.findMany({
+      where: filters,
+      include: {
+        site: true,
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true
+          }
+        },
+        items: true,
+        approvals: {
+          select: {
+            id: true,
+            step: true,
+            action: true,
+            comment: true,
+            actedAt: true
+          }
+        }
+      },
+      orderBy: {
+        updatedAt: "desc"
+      }
+    });
+  }
+
+  async getDashboardSummary(user: AuthenticatedUser) {
+    const baseWhere: Prisma.ExpenseWhereInput = {};
+    if (user.role === "submitter") {
+      baseWhere.userId = user.id;
+    } else if (user.role === "site_manager") {
+      baseWhere.siteId = user.siteId ?? undefined;
+    }
+
+    const [pendingSite, pendingHq, approved, recent] = await Promise.all([
+      this.prisma.expense.count({
+        where: { ...baseWhere, status: ExpenseStatus.PENDING_SITE }
+      }),
+      this.prisma.expense.count({
+        where: { ...baseWhere, status: ExpenseStatus.PENDING_HQ }
+      }),
+      this.prisma.expense.count({
+        where: { ...baseWhere, status: ExpenseStatus.APPROVED }
+      }),
+      this.prisma.expense.findMany({
+        where: baseWhere,
+        orderBy: { updatedAt: "desc" },
+        take: 5,
+        select: {
+          id: true,
+          status: true,
+          totalAmount: true,
+          usageDate: true,
+          updatedAt: true,
+          site: {
+            select: { name: true, code: true }
+          }
+        }
+      })
+    ]);
+
+    const approvalRate = await this.calculateApprovalRate(baseWhere);
+
+    return {
+      metrics: {
+        approvalRate,
+        pendingSite,
+        pendingHq,
+        approved
+      },
+      recent: recent.map((item) => ({
+        id: item.id,
+        status: item.status,
+        site: item.site?.name ?? item.site?.code ?? "-",
+        amount: item.totalAmount.toString(),
+        usageDate: item.usageDate.toISOString(),
+        updatedAt: item.updatedAt.toISOString()
+      }))
+    };
+  }
+
+  private async calculateApprovalRate(where: Prisma.ExpenseWhereInput) {
+    const totalCount = await this.prisma.expense.count({ where });
+    if (totalCount === 0) {
+      return 0;
+    }
+    const approvedCount = await this.prisma.expense.count({
+      where: { ...where, status: ExpenseStatus.APPROVED }
+    });
+    return Math.round((approvedCount / totalCount) * 100);
+  }
+
+  async getPendingApprovals(user: AuthenticatedUser) {
+    const where: Prisma.ExpenseWhereInput = {};
+    if (user.role === "site_manager") {
+      where.status = ExpenseStatus.PENDING_SITE;
+      where.siteId = user.siteId ?? undefined;
+    } else if (user.role === "hq_admin") {
+      where.status = ExpenseStatus.PENDING_HQ;
+    } else {
+      return [];
+    }
+
+    return this.prisma.expense.findMany({
+      where,
+      include: {
+        user: {
+          select: { fullName: true, email: true }
+        },
+        site: {
+          select: { name: true, code: true }
+        },
+        items: {
+          select: { category: true, amount: true }
+        },
+        approvals: {
+          select: {
+            id: true,
+            comment: true
+          }
+        }
+      },
+      orderBy: {
+        updatedAt: "desc"
+      }
+    });
+  }
+
+  async approveExpenses(user: AuthenticatedUser, dto: ApproveExpenseDto) {
+    return this.handleApprovalAction(user, dto.expenseIds, {
+      type: "approve",
+      comment: dto.comment
+    });
+  }
+
+  async rejectExpenses(user: AuthenticatedUser, dto: RejectExpenseDto) {
+    return this.handleApprovalAction(user, dto.expenseIds, {
+      type: "reject",
+      comment: dto.comment
+    });
+  }
+
+  private async handleApprovalAction(
+    user: AuthenticatedUser,
+    expenseIds: string[],
+    options: { type: "approve" | "reject"; comment?: string }
+  ) {
+    if (expenseIds.length === 0) {
+      return { count: 0 };
+    }
+
+    const expenses = await this.prisma.expense.findMany({
+      where: {
+        id: { in: expenseIds }
+      },
+      select: {
+        id: true,
+        status: true,
+        siteId: true,
+        userId: true
+      }
+    });
+
+    if (expenses.length !== expenseIds.length) {
+      const missingIds = expenseIds.filter((id) => !expenses.some((expense) => expense.id === id));
+      throw new Error(`존재하지 않는 경비 ID: ${missingIds.join(", ")}`);
+    }
+
+    const now = new Date();
+
+    const transactions = expenses.map((expense) => {
+      const { nextStatus, step, action, comment } = this.calculateNextStatus({
+        expense,
+        user,
+        type: options.type,
+        comment: options.comment
+      });
+
+      return this.prisma.expense.update({
+        where: { id: expense.id },
+        data: {
+          status: nextStatus,
+          approvals: {
+            create: {
+              step,
+              approverId: user.id,
+              action,
+              comment,
+              actedAt: now
+            }
+          }
+        }
+      });
+    });
+
+    const updated = await this.prisma.$transaction(transactions);
+
+    return {
+      count: updated.length,
+      items: updated.map((item) => ({
+        id: item.id,
+        status: item.status
+      }))
+    };
+  }
+
+  private calculateNextStatus({
+    expense,
+    user,
+    type,
+    comment
+  }: {
+    expense: { id: string; status: ExpenseStatus; siteId: string; userId: string };
+    user: AuthenticatedUser;
+    type: "approve" | "reject";
+    comment?: string;
+  }) {
+    const trimmedComment = comment?.trim();
+
+    if (user.role === "site_manager") {
+      if (!user.siteId || user.siteId !== expense.siteId) {
+        throw new Error("해당 현장에 대한 권한이 없습니다.");
+      }
+      if (expense.status !== ExpenseStatus.PENDING_SITE) {
+        throw new Error("소장 승인 단계의 경비만 처리할 수 있습니다.");
+      }
+
+      if (type === "approve") {
+        return {
+          nextStatus: ExpenseStatus.PENDING_HQ,
+          step: 1,
+          action: ApprovalAction.APPROVED,
+          comment: trimmedComment ?? null
+        };
+      }
+
+      if (!trimmedComment) {
+        throw new Error("반려 사유를 입력해 주세요.");
+      }
+
+      return {
+        nextStatus: ExpenseStatus.REJECTED_SITE,
+        step: 1,
+        action: ApprovalAction.REJECTED,
+        comment: trimmedComment
+      };
+    }
+
+    if (user.role === "hq_admin") {
+      if (expense.status !== ExpenseStatus.PENDING_HQ) {
+        throw new Error("본사 승인 단계의 경비만 처리할 수 있습니다.");
+      }
+
+      if (type === "approve") {
+        return {
+          nextStatus: ExpenseStatus.APPROVED,
+          step: 2,
+          action: ApprovalAction.APPROVED,
+          comment: trimmedComment ?? null
+        };
+      }
+
+      if (!trimmedComment) {
+        throw new Error("반려 사유를 입력해 주세요.");
+      }
+
+      return {
+        nextStatus: ExpenseStatus.REJECTED_HQ,
+        step: 2,
+        action: ApprovalAction.REJECTED,
+        comment: trimmedComment
+      };
+    }
+
+    throw new Error("승인 권한이 없는 역할입니다.");
+  }
+
+  async getMetadata(user: AuthenticatedUser) {
+    const categories = EXPENSE_CATEGORIES;
+    let sites: Array<{ id: string; code: string; name: string }> = [];
+
+    if (user.role === "hq_admin") {
+      sites = await this.prisma.site.findMany({
+        where: { isActive: true },
+        select: { id: true, code: true, name: true },
+        orderBy: { name: "asc" }
+      });
+    } else if (user.siteId) {
+      const site = await this.prisma.site.findUnique({
+        where: { id: user.siteId },
+        select: { id: true, code: true, name: true }
+      });
+      sites = site ? [site] : [];
+    }
+
+    return {
+      categories,
+      sites
+    };
+  }
+
+  async findOne(user: AuthenticatedUser, expenseId: string) {
+    const expense = await this.prisma.expense.findUnique({
+      where: { id: expenseId },
+      include: expenseDetailInclude
+    });
+
+    if (!expense) {
+      throw new NotFoundException("경비를 찾을 수 없습니다.");
+    }
+
+    this.ensureReadable(user, expense);
+
+    return this.toExpenseResponse(expense, user);
+  }
+
+  async updateExpense(user: AuthenticatedUser, expenseId: string, dto: UpdateExpenseDto) {
+    const expense = await this.prisma.expense.findUnique({
+      where: { id: expenseId },
+      include: { site: true, user: true, approvals: true }
+    });
+
+    if (!expense) {
+      throw new NotFoundException("경비를 찾을 수 없습니다.");
+    }
+
+    this.ensureEditable(user, expense);
+
+    const targetSiteId = dto.siteId ?? expense.siteId;
+
+    if (!targetSiteId) {
+      throw new BadRequestException("현장 정보를 선택해 주세요.");
+    }
+
+    const nextStatus = dto.status ?? expense.status;
+    if (user.role === "submitter") {
+      const allowedStatuses = new Set<ExpenseStatus>([...this.editableStatuses, ExpenseStatus.PENDING_SITE]);
+      if (!allowedStatuses.has(nextStatus)) {
+        throw new BadRequestException("허용되지 않은 상태로 변경할 수 없습니다.");
+      }
+    }
+
+    const updated = await this.prisma.expense.update({
+      where: { id: expenseId },
+      data: {
+        siteId: targetSiteId,
+        status: nextStatus,
+        totalAmount: new Prisma.Decimal(dto.totalAmount),
+        usageDate: new Date(dto.usageDate),
+        vendor: dto.vendor,
+        purposeDetail: dto.purposeDetail,
+        items: {
+          deleteMany: {},
+          createMany: {
+            data: dto.items.map((item) => ({
+              category: item.category,
+              amount: new Prisma.Decimal(item.amount),
+              usageDate: new Date(item.usageDate),
+              vendor: item.vendor,
+              description: item.description ?? null
+            }))
+          }
+        }
+      },
+      include: expenseDetailInclude
+    });
+
+    return this.toExpenseResponse(updated, user);
+  }
+
+  private ensureReadable(user: AuthenticatedUser, expense: { userId: string; siteId: string | null }) {
+    if (user.role === "submitter" && expense.userId !== user.id) {
+      throw new ForbiddenException("경비에 접근할 수 없습니다.");
+    }
+
+    if (user.role === "site_manager" && user.siteId && expense.siteId !== user.siteId) {
+      throw new ForbiddenException("경비에 접근할 수 없습니다.");
+    }
+  }
+
+  private ensureEditable(user: AuthenticatedUser, expense: { userId: string; status: ExpenseStatus }) {
+    if (user.role !== "submitter" || expense.userId !== user.id) {
+      throw new ForbiddenException("경비를 수정할 권한이 없습니다.");
+    }
+
+    if (!this.editableStatuses.includes(expense.status)) {
+      throw new BadRequestException("현재 상태에서는 경비를 수정할 수 없습니다.");
+    }
+  }
+
+  private toExpenseResponse(expense: ExpenseWithRelations, user: AuthenticatedUser) {
+    const canEdit =
+      user.role === "submitter" && this.editableStatuses.includes(expense.status) && expense.userId === user.id;
+    const canResubmit =
+      user.role === "submitter" && this.resubmittableStatuses.includes(expense.status) && expense.userId === user.id;
+
+    return {
+      id: expense.id,
+      status: expense.status,
+      totalAmount: expense.totalAmount.toString(),
+      usageDate: expense.usageDate.toISOString(),
+      vendor: expense.vendor,
+      purposeDetail: expense.purposeDetail,
+      site: expense.site,
+      user: expense.user,
+      createdAt: expense.createdAt.toISOString(),
+      updatedAt: expense.updatedAt.toISOString(),
+      items: expense.items.map((item) => ({
+        id: item.id,
+        category: item.category,
+        amount: item.amount.toString(),
+        usageDate: item.usageDate.toISOString(),
+        vendor: item.vendor,
+        description: item.description
+      })),
+      approvals: expense.approvals.map((approval) => ({
+        id: approval.id,
+        step: approval.step,
+        action: approval.action,
+        comment: approval.comment,
+        actedAt: approval.actedAt ? approval.actedAt.toISOString() : null,
+        approver: approval.approver
+      })),
+      permissions: {
+        canEdit,
+        canResubmit
+      }
+    };
+  }
+}

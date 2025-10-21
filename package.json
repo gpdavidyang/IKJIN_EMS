@@ -1,0 +1,19 @@
+{
+  "name": "ikjin-ems",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "seed": "pnpm --filter @ikjin/api exec ts-node --project tsconfig.seed.json --transpile-only ../../tools/scripts/seed.ts"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0"
+  }
+}

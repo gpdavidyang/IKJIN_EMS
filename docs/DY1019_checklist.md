@@ -1,0 +1,26 @@
+# 2025-10-19 진행 체크리스트
+
+- [x] 데이터/환경 정비
+  - [x] `tools/scripts/seed.ts`의 `.env` 경로를 루트 `.env`로 수정하고 검증 (확인: `tools/scripts/seed.ts`)
+  - [x] `pnpm --filter @ikjin/api prisma generate`/`migrate` 명령 스크립트화 (`apps/api/package.json`의 `prisma:*` 스크립트)
+- [x] 인증 흐름 보강
+  - [x] 로그인 후 `auth/me`로 사용자/역할 동기화, 토큰 만료 처리 (`apps/api/src/auth/auth.controller.ts`, `apps/web/src/contexts/AuthContext.tsx`)
+  - [x] Refresh token·로그아웃 API 및 FE 연동 (`apps/api/src/auth/auth.service.ts`, `apps/web/src/contexts/AuthContext.tsx`)
+  - [x] 비밀번호 변경 API 및 FE 연동 (`apps/api/src/auth/auth.controller.ts`, `apps/web/src/pages/account/password.tsx`)
+  - [x] 역할별 접근 제어(Submitter/소장/HQ/Auditor) 적용 (`apps/api/src/expenses/expenses.controller.ts`, `apps/web/src/layout/AppShell.tsx`)
+- [x] 경비 작성 기능 고도화
+  - [x] 서버 유효성 에러 메시지 정리 및 FE 표시 (`apps/api/src/expenses/dto`, `apps/web/src/pages/expenses/*.tsx`)
+  - [x] 항목 카테고리·현장 옵션 API 연동 (`apps/api/src/expenses/expenses.service.ts`, `apps/web/src/pages/expenses/new.tsx`)
+  - [x] 경비 상세/수정/재상신 화면 및 API (`apps/web/src/pages/expenses/[id].tsx`, `apps/web/src/pages/expenses/[id]/edit.tsx`)
+- [x] 승인 기능 완성
+  - [x] 일괄 승인/반려와 코멘트 입력, API 연동 (`apps/api/src/expenses/expenses.service.ts`, `apps/web/src/pages/approvals.tsx`)
+  - [x] 승인/반려 후 목록 갱신 및 알림 UI (`apps/web/src/pages/approvals.tsx`)
+- [ ] 보고/관리 및 기타 필수 기능
+  - [x] 경비 검색(기간/금액)과 통계 검증 (`apps/api/src/expenses/expenses.service.ts`, `apps/web/src/pages/expenses.tsx`, `apps/web/src/pages/dashboard.tsx`)
+  - [x] 사이트·유저 관리 화면 및 API (`apps/api/src/site`, `apps/api/src/user`, `apps/web/src/pages/admin`)
+  - [ ] 감사 로그/감사자 역할 반영
+    - [x] 감사자(Auditor) 역할 읽기 전용 접근 반영 (`apps/api/src/expenses/expenses.controller.ts`, `apps/web/src/layout/AppShell.tsx`)
+    - [ ] 감사 로그 저장/조회 로직 구현 필요 (`apps/api/prisma/schema.prisma`의 `AuditLog` 미사용)
+  - [ ] Excel 추출, 첨부 파일(Phase 2) 준비
+    - [ ] 경비/승인 Excel 다운로드 API 및 FE 연동 미구현
+    - [ ] 첨부 파일 업로드·저장소 연동 설계 필요

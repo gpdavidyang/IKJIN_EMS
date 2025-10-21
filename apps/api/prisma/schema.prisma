@@ -1,0 +1,124 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Site {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  region    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users    User[]
+  expenses Expense[]
+}
+
+model Role {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+}
+
+model User {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  passwordHash   String
+  fullName       String
+  role           Role      @relation(fields: [roleId], references: [id])
+  roleId         Int
+  site           Site?     @relation(fields: [siteId], references: [id])
+  siteId         String?
+  status         UserStatus @default(ACTIVE)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  expenses  Expense[]
+  approvals Approval[] @relation("Approver")
+  auditLogs AuditLog[]
+}
+
+model Expense {
+  id            String         @id @default(uuid())
+  user          User           @relation(fields: [userId], references: [id])
+  userId        String
+  site          Site           @relation(fields: [siteId], references: [id])
+  siteId        String
+  status        ExpenseStatus  @default(DRAFT)
+  totalAmount   Decimal        @db.Decimal(12, 2)
+  usageDate     DateTime
+  vendor        String
+  purposeDetail String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  items     ExpenseItem[]
+  approvals Approval[]
+}
+
+model ExpenseItem {
+  id          String   @id @default(uuid())
+  expense     Expense  @relation(fields: [expenseId], references: [id])
+  expenseId   String
+  category    String
+  amount      Decimal  @db.Decimal(12, 2)
+  usageDate   DateTime
+  vendor      String
+  description String?
+}
+
+model Approval {
+  id         String        @id @default(uuid())
+  expense    Expense       @relation(fields: [expenseId], references: [id])
+  expenseId  String
+  step       Int
+  approver   User          @relation("Approver", fields: [approverId], references: [id])
+  approverId String
+  action     ApprovalAction
+  comment    String?
+  actedAt    DateTime?
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  entityType String
+  entityId   String
+  action     String
+  payload    Json?
+  actor      User?    @relation(fields: [actorId], references: [id])
+  actorId    String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ExpenseStatus {
+  DRAFT
+  PENDING_SITE
+  REJECTED_SITE
+  PENDING_HQ
+  REJECTED_HQ
+  APPROVED
+}
+
+enum ApprovalAction {
+  PENDING
+  APPROVED
+  REJECTED
+}
