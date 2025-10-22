@@ -7,6 +7,7 @@
     "test": "pnpm -r test",
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
+    "prisma:migrate:reset": "pnpm --filter @ikjin/api exec prisma migrate reset --force",
     "seed": "pnpm --filter @ikjin/api exec ts-node --project tsconfig.seed.json --transpile-only ../../tools/scripts/seed.ts"
   },
   "prisma": {

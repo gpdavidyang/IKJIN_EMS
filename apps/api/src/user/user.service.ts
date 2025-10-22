@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
@@ -53,6 +54,7 @@ export class UserService {
       data: {
         email: dto.email,
         fullName: dto.fullName,
+        phone: dto.phone?.trim() || null,
         passwordHash,
         roleId: role.id,
         siteId: dto.siteId,
@@ -83,6 +85,7 @@ export class UserService {
       where: { id },
       data: {
         ...(dto.fullName !== undefined ? { fullName: dto.fullName } : {}),
+        ...(dto.phone !== undefined ? { phone: dto.phone?.trim() || null } : {}),
         roleId,
         ...(dto.siteId !== undefined ? { siteId: dto.siteId } : {}),
         ...(dto.status !== undefined ? { status: dto.status } : {}),
@@ -95,5 +98,17 @@ export class UserService {
         }
       }
     });
+  }
+
+  async remove(id: string) {
+    await this.findOne(id);
+    try {
+      await this.prisma.user.delete({ where: { id } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+        throw new BadRequestException("연결된 데이터가 있어 사용자를 삭제할 수 없습니다.");
+      }
+      throw error;
+    }
   }
 }

@@ -8,6 +8,11 @@ export class CreateUserDto {
   @MaxLength(100)
   fullName!: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  phone?: string | null;
+
   @IsString()
   @MinLength(8)
   password!: string;

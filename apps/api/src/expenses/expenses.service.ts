@@ -4,7 +4,13 @@ import { promises as fs } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import ExcelJS from "exceljs";
-import { ApprovalAction, ExpenseStatus, Prisma, ExpenseAttachment as ExpenseAttachmentModel } from "@prisma/client";
+import {
+  ApprovalAction,
+  ExpenseStatus,
+  Prisma,
+  ExpenseAttachment as ExpenseAttachmentModel,
+  UserStatus
+} from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { CreateExpenseDto } from "./dto/create-expense.dto";
@@ -110,6 +116,7 @@ export class ExpensesService {
           createMany: {
             data: dto.items.map((item) => ({
               category: item.category,
+              paymentMethod: item.paymentMethod,
               amount: new Prisma.Decimal(item.amount),
               usageDate: new Date(item.usageDate),
               vendor: item.vendor,
@@ -179,15 +186,38 @@ export class ExpensesService {
       this.prisma.expense.findMany({
         where: baseWhere,
         orderBy: { updatedAt: "desc" },
-        take: 5,
+        take: 10,
         select: {
           id: true,
           status: true,
           totalAmount: true,
           usageDate: true,
           updatedAt: true,
+          vendor: true,
+          purposeDetail: true,
+          siteId: true,
+          userId: true,
           site: {
-            select: { name: true, code: true }
+            select: { id: true, name: true, code: true }
+          },
+          user: {
+            select: { id: true, fullName: true, email: true }
+          },
+          items: {
+            select: {
+              category: true,
+              paymentMethod: true,
+              amount: true,
+              usageDate: true,
+              vendor: true,
+              description: true
+            }
+          },
+          approvals: {
+            select: {
+              step: true,
+              comment: true
+            }
           }
         }
       })
@@ -205,10 +235,39 @@ export class ExpensesService {
       recent: recent.map((item) => ({
         id: item.id,
         status: item.status,
-        site: item.site?.name ?? item.site?.code ?? "-",
-        amount: item.totalAmount.toString(),
+        totalAmount: item.totalAmount.toString(),
         usageDate: item.usageDate.toISOString(),
-        updatedAt: item.updatedAt.toISOString()
+        updatedAt: item.updatedAt.toISOString(),
+        vendor: item.vendor,
+        purposeDetail: item.purposeDetail,
+        siteId: item.siteId,
+        userId: item.userId,
+        site: item.site
+          ? {
+              id: item.site.id,
+              name: item.site.name,
+              code: item.site.code
+            }
+          : null,
+        user: item.user
+          ? {
+              id: item.user.id,
+              fullName: item.user.fullName,
+              email: item.user.email
+            }
+          : null,
+        items: item.items.map((expenseItem) => ({
+          category: expenseItem.category,
+          paymentMethod: expenseItem.paymentMethod,
+          amount: expenseItem.amount.toString(),
+          usageDate: expenseItem.usageDate.toISOString(),
+          vendor: expenseItem.vendor,
+          description: expenseItem.description
+        })),
+        approvals: item.approvals.map((approval) => ({
+          step: approval.step,
+          comment: approval.comment
+        }))
       }))
     };
   }
@@ -245,11 +304,12 @@ export class ExpensesService {
           select: { name: true, code: true }
         },
         items: {
-          select: { category: true, amount: true }
+          select: { category: true, amount: true, paymentMethod: true, description: true }
         },
         approvals: {
           select: {
             id: true,
+            step: true,
             comment: true
           }
         }
@@ -427,9 +487,32 @@ export class ExpensesService {
       sites = site ? [site] : [];
     }
 
+    let users: Array<{ id: string; fullName: string; email: string; siteId: string | null }> = [];
+
+    if (user.role === "hq_admin" || user.role === "auditor") {
+      users = await this.prisma.user.findMany({
+        where: { status: UserStatus.ACTIVE },
+        select: { id: true, fullName: true, email: true, siteId: true },
+        orderBy: { fullName: "asc" }
+      });
+    } else if (user.role === "site_manager" && user.siteId) {
+      users = await this.prisma.user.findMany({
+        where: { status: UserStatus.ACTIVE, siteId: user.siteId },
+        select: { id: true, fullName: true, email: true, siteId: true },
+        orderBy: { fullName: "asc" }
+      });
+    } else {
+      const self = await this.prisma.user.findUnique({
+        where: { id: user.id },
+        select: { id: true, fullName: true, email: true, siteId: true }
+      });
+      users = self ? [self] : [];
+    }
+
     return {
       categories,
-      sites
+      sites,
+      users
     };
   }
 
@@ -488,6 +571,7 @@ export class ExpensesService {
           createMany: {
             data: dto.items.map((item) => ({
               category: item.category,
+              paymentMethod: item.paymentMethod,
               amount: new Prisma.Decimal(item.amount),
               usageDate: new Date(item.usageDate),
               vendor: item.vendor,
@@ -750,6 +834,64 @@ export class ExpensesService {
       }
     }
 
+    if (query.category) {
+      filters.items = {
+        some: {
+          category: query.category
+        }
+      };
+    }
+
+    if (query.userId) {
+      const allowedToOverride =
+        user.role === "hq_admin" ||
+        user.role === "auditor" ||
+        (user.role === "site_manager" && !!user.siteId) ||
+        user.id === query.userId;
+      if (allowedToOverride) {
+        filters.userId = query.userId;
+      }
+    }
+
+    if (query.keyword) {
+      const trimmed = query.keyword.trim();
+      if (trimmed.length > 0) {
+        const caseInsensitiveContains = { contains: trimmed, mode: "insensitive" as const };
+        const existingAnd = Array.isArray(filters.AND) ? filters.AND : filters.AND ? [filters.AND] : [];
+        filters.AND = [
+          ...existingAnd,
+          {
+            OR: [
+              { vendor: caseInsensitiveContains },
+              { purposeDetail: caseInsensitiveContains },
+              {
+                user: {
+                  is: {
+                    OR: [
+                      { fullName: caseInsensitiveContains },
+                      { email: caseInsensitiveContains }
+                    ]
+                  }
+                }
+              },
+              {
+                site: {
+                  is: {
+                    OR: [
+                      { name: caseInsensitiveContains },
+                      { code: caseInsensitiveContains }
+                    ]
+                  }
+                }
+              },
+              { items: { some: { description: caseInsensitiveContains } } },
+              { approvals: { some: { comment: caseInsensitiveContains } } }
+            ]
+          }
+        ];
+      }
+    }
+
     return filters;
   }
 
@@ -833,6 +975,7 @@ export class ExpensesService {
       items: expense.items.map((item) => ({
         id: item.id,
         category: item.category,
+        paymentMethod: item.paymentMethod,
         amount: item.amount.toString(),
         usageDate: item.usageDate.toISOString(),
         vendor: item.vendor,

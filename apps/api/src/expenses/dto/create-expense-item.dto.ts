@@ -1,8 +1,12 @@
-import { IsDateString, IsNumber, IsOptional, IsString, MaxLength } from "class-validator";
+import { IsDateString, IsEnum, IsNumber, IsOptional, IsString, MaxLength } from "class-validator";
+import { PaymentMethod } from "@prisma/client";
 
 export class CreateExpenseItemDto {
   @IsString()
   category!: string;
+
+  @IsEnum(PaymentMethod)
+  paymentMethod!: PaymentMethod;
 
   @IsNumber({ maxDecimalPlaces: 2 })
   amount!: number;

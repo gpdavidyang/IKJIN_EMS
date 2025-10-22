@@ -44,6 +44,24 @@ export class ExpensesController {
     return this.expensesService.findAll(user, query);
   }
 
+  @Get("meta")
+  @Roles("submitter", "site_manager", "hq_admin", "auditor")
+  metadata(@CurrentUser() user: AuthenticatedUser) {
+    return this.expensesService.getMetadata(user);
+  }
+
+  @Get("dashboard")
+  @Roles("submitter", "site_manager", "hq_admin", "auditor")
+  dashboard(@CurrentUser() user: AuthenticatedUser) {
+    return this.expensesService.getDashboardSummary(user);
+  }
+
+  @Get("pending")
+  @Roles("site_manager", "hq_admin")
+  pending(@CurrentUser() user: AuthenticatedUser) {
+    return this.expensesService.getPendingApprovals(user);
+  }
+
   @Get("export")
   @Roles("submitter", "site_manager", "hq_admin", "auditor")
   async export(
@@ -60,24 +78,6 @@ export class ExpensesController {
     res.send(buffer);
   }
 
-  @Get(":id")
-  @Roles("submitter", "site_manager", "hq_admin", "auditor")
-  detail(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
-    return this.expensesService.findOne(user, id);
-  }
-
-  @Get("dashboard")
-  @Roles("submitter", "site_manager", "hq_admin", "auditor")
-  dashboard(@CurrentUser() user: AuthenticatedUser) {
-    return this.expensesService.getDashboardSummary(user);
-  }
-
-  @Get("pending")
-  @Roles("site_manager", "hq_admin")
-  pending(@CurrentUser() user: AuthenticatedUser) {
-    return this.expensesService.getPendingApprovals(user);
-  }
-
   @Post("approve")
   @Roles("site_manager", "hq_admin")
   approve(@CurrentUser() user: AuthenticatedUser, @Body() dto: ApproveExpenseDto) {
@@ -90,10 +90,10 @@ export class ExpensesController {
     return this.expensesService.rejectExpenses(user, dto);
   }
 
-  @Get("meta")
+  @Get(":id")
   @Roles("submitter", "site_manager", "hq_admin", "auditor")
-  metadata(@CurrentUser() user: AuthenticatedUser) {
-    return this.expensesService.getMetadata(user);
+  detail(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
+    return this.expensesService.findOne(user, id);
   }
 
   @Post(":id/attachments")

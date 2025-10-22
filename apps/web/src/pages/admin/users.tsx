@@ -8,6 +8,7 @@ interface UserResponse {
   id: string;
   email: string;
   fullName: string;
+  phone: string | null;
   status: "ACTIVE" | "INACTIVE";
   role: {
     id: number;
@@ -28,11 +29,20 @@ interface SiteOption {
   name: string;
 }
 
+interface FormState {
+  email: string;
+  fullName: string;
+  phone: string;
+  password: string;
+  role: string;
+  siteId: string;
+}
+
 const ROLE_OPTIONS = [
-  { value: "submitter", label: "Submitter" },
-  { value: "site_manager", label: "Site Manager" },
-  { value: "hq_admin", label: "HQ Admin" },
-  { value: "auditor", label: "Auditor" }
+  { value: "submitter", label: "현장실무자" },
+  { value: "site_manager", label: "현장관리자" },
+  { value: "hq_admin", label: "본사관리자" },
+  { value: "auditor", label: "재무관리자" }
 ];
 
 const AdminUsersPage = () => {
@@ -43,14 +53,17 @@ const AdminUsersPage = () => {
   const [sites, setSites] = useState<SiteOption[]>([]);
   const [fetching, setFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({
+  const createInitialForm = (): FormState => ({
     email: "",
     fullName: "",
+    phone: "",
     password: "",
     role: "submitter",
     siteId: ""
   });
+  const [form, setForm] = useState<FormState>(createInitialForm);
   const [submitting, setSubmitting] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAuthorized) return;
@@ -75,27 +88,48 @@ const AdminUsersPage = () => {
     void load();
   }, [isAuthorized]);
 
-  const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
+  const resetForm = () => {
+    setForm(createInitialForm());
+    setEditingUserId(null);
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!form.email.trim() || !form.fullName.trim() || !form.password.trim()) {
-      setError("이메일, 이름, 비밀번호를 모두 입력해 주세요.");
+    if (!form.email.trim() || !form.fullName.trim()) {
+      setError("이메일과 이름을 모두 입력해 주세요.");
+      return;
+    }
+    if (!editingUserId && !form.password.trim()) {
+      setError("임시 비밀번호를 입력해 주세요.");
       return;
     }
     setError(null);
+    const payload = {
+      email: form.email.trim(),
+      fullName: form.fullName.trim(),
+      phone: form.phone.trim() ? form.phone.trim() : null,
+      role: form.role,
+      siteId: form.siteId ? form.siteId : null
+    };
     try {
       setSubmitting(true);
-      await apiClient.post("/users", {
-        email: form.email.trim(),
-        fullName: form.fullName.trim(),
-        password: form.password.trim(),
-        role: form.role,
-        siteId: form.siteId || undefined
-      });
-      setForm({ email: "", fullName: "", password: "", role: "submitter", siteId: "" });
+      if (editingUserId) {
+        const updatePayload = {
+          ...payload,
+          ...(form.password.trim() ? { password: form.password.trim() } : {})
+        };
+        await apiClient.patch(`/users/${editingUserId}`, updatePayload);
+      } else {
+        await apiClient.post("/users", {
+          ...payload,
+          password: form.password.trim()
+        });
+      }
+      resetForm();
       const userData = await apiClient.get<UserResponse[]>("/users");
       setUsers(userData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "사용자 생성 중 오류가 발생했습니다.");
+      setError(err instanceof Error ? err.message : editingUserId ? "사용자 수정 중 오류가 발생했습니다." : "사용자 생성 중 오류가 발생했습니다.");
     } finally {
       setSubmitting(false);
     }
@@ -160,6 +194,35 @@ const AdminUsersPage = () => {
     }
   };
 
+  const handleEdit = (target: UserResponse) => {
+    setError(null);
+    setEditingUserId(target.id);
+    setForm({
+      email: target.email,
+      fullName: target.fullName,
+      phone: target.phone ?? "",
+      password: "",
+      role: target.role.name,
+      siteId: target.site?.id ?? ""
+    });
+  };
+
+  const handleDelete = async (target: UserResponse) => {
+    setError(null);
+    const confirmed = typeof window === "undefined" ? true : window.confirm("해당 사용자를 삭제하시겠습니까?");
+    if (!confirmed) return;
+    try {
+      await apiClient.delete(`/users/${target.id}`);
+      if (editingUserId === target.id) {
+        resetForm();
+      }
+      const userData = await apiClient.get<UserResponse[]>("/users");
+      setUsers(userData);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "사용자 삭제에 실패했습니다.");
+    }
+  };
+
   return (
     <AppShell title="사용자 관리">
       <Head>
@@ -184,6 +247,7 @@ const AdminUsersPage = () => {
                       <tr>
                         <th className="px-4 py-3">이름</th>
                         <th className="px-4 py-3">이메일</th>
+                        <th className="px-4 py-3">휴대폰</th>
                         <th className="px-4 py-3">역할</th>
                         <th className="px-4 py-3">현장</th>
                         <th className="px-4 py-3">상태</th>
@@ -195,6 +259,7 @@ const AdminUsersPage = () => {
                         <tr key={record.id} className="border-t border-[#E4E7EB]">
                           <td className="px-4 py-3">{record.fullName}</td>
                           <td className="px-4 py-3">{record.email}</td>
+                          <td className="px-4 py-3">{record.phone ?? "-"}</td>
                           <td className="px-4 py-3">
                             <select
                               className="rounded-md border border-[#E4E7EB] px-2 py-1 text-sm"
@@ -230,18 +295,32 @@ const AdminUsersPage = () => {
                             </span>
                           </td>
                           <td className="px-4 py-3">
-                            <button
-                              className="rounded-md border border-[#E4E7EB] px-3 py-1 text-xs text-[#3E4C59] transition hover:bg-[#E4E7EB]"
-                              onClick={() => toggleStatus(record)}
-                            >
-                              {record.status === "ACTIVE" ? "비활성화" : "활성화"}
-                            </button>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                className="rounded-md border border-[#E4E7EB] px-3 py-1 text-xs text-[#3E4C59] transition hover:bg-[#E4E7EB]"
+                                onClick={() => handleEdit(record)}
+                              >
+                                수정
+                              </button>
+                              <button
+                                className="rounded-md border border-[#E4E7EB] px-3 py-1 text-xs text-[#D64545] transition hover:bg-[#F5DBDB]"
+                                onClick={() => handleDelete(record)}
+                              >
+                                삭제
+                              </button>
+                              <button
+                                className="rounded-md border border-[#E4E7EB] px-3 py-1 text-xs text-[#3E4C59] transition hover:bg-[#E4E7EB]"
+                                onClick={() => toggleStatus(record)}
+                              >
+                                {record.status === "ACTIVE" ? "비활성화" : "활성화"}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
                       {users.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="px-4 py-6 text-center text-sm text-[#3E4C59]">
+                          <td colSpan={7} className="px-4 py-6 text-center text-sm text-[#3E4C59]">
                             등록된 사용자가 없습니다.
                           </td>
                         </tr>
@@ -253,8 +332,10 @@ const AdminUsersPage = () => {
             </div>
 
             <div className="rounded-lg border border-[#E4E7EB] bg-white p-6 shadow-sm">
-              <h2 className="text-base font-semibold text-[#0F4C81]">사용자 추가</h2>
-              <form className="mt-4 grid gap-4 md:grid-cols-3" onSubmit={handleCreate}>
+              <h2 className="text-base font-semibold text-[#0F4C81]">
+                {editingUserId ? "사용자 수정" : "사용자 추가"}
+              </h2>
+              <form className="mt-4 grid gap-4 md:grid-cols-3" onSubmit={handleSubmit}>
                 <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
                   <span>이메일</span>
                   <input
@@ -276,13 +357,23 @@ const AdminUsersPage = () => {
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
-                  <span>임시 비밀번호</span>
+                  <span>휴대폰</span>
+                  <input
+                    className="rounded-md border border-[#CBD2D9] px-3 py-2"
+                    type="tel"
+                    value={form.phone}
+                    onChange={(event) => setForm((prev) => ({ ...prev, phone: event.target.value }))}
+                    placeholder="예: 010-1234-5678"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
+                  <span>{editingUserId ? "임시 비밀번호 (선택)" : "임시 비밀번호"}</span>
                   <input
                     className="rounded-md border border-[#CBD2D9] px-3 py-2"
                     type="password"
                     value={form.password}
                     onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
-                    required
+                    required={!editingUserId}
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
@@ -320,8 +411,24 @@ const AdminUsersPage = () => {
                     className="rounded-md bg-[#0F4C81] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#0c3b64] disabled:cursor-not-allowed disabled:bg-[#9AA5B1]"
                     disabled={submitting}
                   >
-                    {submitting ? "등록 중..." : "사용자 등록"}
+                    {submitting
+                      ? editingUserId
+                        ? "수정 중..."
+                        : "등록 중..."
+                      : editingUserId
+                      ? "수정 완료"
+                      : "사용자 등록"}
                   </button>
+                  {editingUserId ? (
+                    <button
+                      type="button"
+                      className="ml-2 rounded-md border border-[#CBD2D9] px-4 py-2 text-sm text-[#3E4C59] transition hover:bg-[#E4E7EB]"
+                      onClick={resetForm}
+                      disabled={submitting}
+                    >
+                      취소
+                    </button>
+                  ) : null}
                 </div>
               </form>
             </div>

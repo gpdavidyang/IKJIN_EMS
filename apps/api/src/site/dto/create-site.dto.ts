@@ -1,4 +1,4 @@
-import { IsBoolean, IsOptional, IsString, MaxLength } from "class-validator";
+import { IsBoolean, IsOptional, IsString, IsUUID, MaxLength } from "class-validator";
 
 export class CreateSiteDto {
   @IsString()
@@ -13,6 +13,15 @@ export class CreateSiteDto {
   @IsString()
   @MaxLength(50)
   region?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  address?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  managerId?: string | null;
 
   @IsOptional()
   @IsBoolean()

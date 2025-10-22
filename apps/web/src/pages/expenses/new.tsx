@@ -1,6 +1,6 @@
 import Head from "next/head";
 import { useRouter } from "next/router";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AppShell from "@/layout/AppShell";
 import { apiClient } from "@/lib/apiClient";
 import { useAuth } from "@/contexts/AuthContext";
@@ -8,47 +8,114 @@ import { useAuth } from "@/contexts/AuthContext";
 type ExpenseStatusValue = "PENDING_SITE" | "DRAFT";
 
 interface ExpenseFormState {
-  usageDate: string;
   vendor: string;
-  purposeDetail: string;
   status: ExpenseStatusValue;
   siteId?: string;
 }
 
+type PaymentMethodValue = "CORPORATE_CARD" | "PERSONAL_CARD" | "CASH" | "OTHER";
+
 interface ExpenseItemInput {
+  id: string;
   category: string;
   amount: string;
   usageDate: string;
+  siteId?: string;
+  paymentMethod: PaymentMethodValue;
+  status: ExpenseStatusValue;
   vendor: string;
   description: string;
 }
 
-const createEmptyItem = (categoryCode?: string): ExpenseItemInput => ({
+const makeItemId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `expense-item-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const createEmptyItem = (
+  categoryCode?: string,
+  vendor?: string,
+  siteId?: string,
+  status?: ExpenseStatusValue,
+  paymentMethod?: PaymentMethodValue
+): ExpenseItemInput => ({
+  id: makeItemId(),
   category: categoryCode ?? "",
   amount: "",
   usageDate: "",
-  vendor: "",
+  siteId,
+  paymentMethod: paymentMethod ?? "CORPORATE_CARD",
+  status: status ?? "PENDING_SITE",
+  vendor: vendor ?? "",
   description: ""
 });
+
+const truncate = (value: string, limit = 500) => {
+  if (value.length <= limit) {
+    return value;
+  }
+  return `${value.slice(0, limit - 1)}…`;
+};
+
+const buildPurposeDetail = (entries: ExpenseItemInput[], vendor: string) => {
+  const descriptions = entries
+    .map((item) => item.description?.trim())
+    .filter((desc): desc is string => Boolean(desc && desc.length > 0));
+  if (descriptions.length > 0) {
+    return truncate(descriptions.join(" / "));
+  }
+
+  const categories = Array.from(
+    new Set(entries.map((item) => item.category).filter((category) => category && category.trim().length > 0))
+  );
+  const usageDate = entries[0]?.usageDate;
+  const labelParts = [
+    vendor.trim() || undefined,
+    categories.length > 0 ? categories.join(", ") : undefined,
+    usageDate ? usageDate.replace(/-/g, ".") : undefined
+  ];
+  const label = labelParts.filter(Boolean).join(" · ");
+  return truncate(label || vendor.trim() || "경비 지출");
+};
 
 const statusOptions: Array<{ value: ExpenseStatusValue; label: string }> = [
   { value: "PENDING_SITE", label: "제출 (소장 승인 대기)" },
   { value: "DRAFT", label: "임시 저장" }
 ];
 
-const formatFileSize = (bytes: number) => {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+const rowStatusOptions: Array<{ value: ExpenseStatusValue; label: string }> = [
+  { value: "PENDING_SITE", label: "미제출" },
+  { value: "DRAFT", label: "임시 저장" }
+];
+
+const paymentMethodOptions: Array<{ value: PaymentMethodValue; label: string }> = [
+  { value: "CORPORATE_CARD", label: "법인카드" },
+  { value: "PERSONAL_CARD", label: "개인카드" },
+  { value: "CASH", label: "현금" },
+  { value: "OTHER", label: "기타" }
+];
+
+const sanitizeAmountInput = (value: string) => value.replace(/[^0-9]/g, "");
+
+const formatAmountDisplay = (value: string) => {
+  const digits = sanitizeAmountInput(value);
+  if (!digits) {
+    return "";
+  }
+  const formatted = Number(digits).toLocaleString("ko-KR");
+  return `₩${formatted}`;
 };
+
+const getPaymentLabel = (value: PaymentMethodValue) =>
+  paymentMethodOptions.find((option) => option.value === value)?.label ?? "";
 
 const NewExpensePage = () => {
   const router = useRouter();
   const { token, loading: authLoading, user } = useAuth();
   const [form, setForm] = useState<ExpenseFormState>({
-    usageDate: "",
     vendor: "",
-    purposeDetail: "",
     status: "PENDING_SITE",
     siteId: undefined
   });
@@ -57,9 +124,16 @@ const NewExpensePage = () => {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [categories, setCategories] = useState<Array<{ code: string; name: string }>>([]);
   const [sites, setSites] = useState<Array<{ id: string; name: string; code: string }>>([]);
-  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
+
+  const currentUserLabel = useMemo(() => {
+    if (!user) {
+      return "-";
+    }
+    return user.fullName?.trim() || user.email;
+  }, [user]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -83,10 +157,15 @@ const NewExpensePage = () => {
         if ((data.sites?.length ?? 0) === 1) {
           setForm((prev) => ({ ...prev, siteId: data.sites[0].id }));
         }
+        const defaultSiteId = (data.sites?.[0]?.id as string | undefined) ?? undefined;
+        const defaultStatus = rowStatusOptions[0]?.value ?? "PENDING_SITE";
         setItems((prev) =>
           prev.map((item) => ({
             ...item,
-            category: item.category || data.categories?.[0]?.code || ""
+            category: item.category || data.categories?.[0]?.code || "",
+            siteId: item.siteId ?? defaultSiteId,
+            paymentMethod: item.paymentMethod || paymentMethodOptions[0]?.value || "CORPORATE_CARD",
+            status: item.status || defaultStatus
           }))
         );
       } catch (err) {
@@ -101,36 +180,30 @@ const NewExpensePage = () => {
 
   const totalAmount = useMemo(() => {
     return items.reduce((sum, item) => {
-      const parsed = Number(item.amount);
-      if (Number.isNaN(parsed)) {
+      const digits = sanitizeAmountInput(item.amount);
+      if (!digits) {
         return sum;
       }
-      return sum + parsed;
+      return sum + Number(digits);
     }, 0);
   }, [items]);
 
-  const handleAttachmentSelect = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files ? Array.from(event.target.files) : [];
-    if (files.length === 0) return;
-    if (pendingAttachments.length + files.length > 5) {
-      setError("첨부 파일은 최대 5개까지 추가할 수 있습니다.");
-      event.target.value = "";
-      return;
+  const selectedTotal = useMemo(() => {
+    if (selectedItemIds.length === 0) {
+      return 0;
     }
-    const oversized = files.find((file) => file.size > 10 * 1024 * 1024);
-    if (oversized) {
-      setError(`"${oversized.name}" 파일이 10MB 제한을 초과했습니다.`);
-      event.target.value = "";
-      return;
-    }
-    setError(null);
-    setPendingAttachments((prev) => [...prev, ...files]);
-    event.target.value = "";
-  };
-
-  const removePendingAttachment = (index: number) => {
-    setPendingAttachments((prev) => prev.filter((_, fileIndex) => fileIndex !== index));
-  };
+    const selectedSet = new Set(selectedItemIds);
+    return items.reduce((sum, item) => {
+      if (!selectedSet.has(item.id)) {
+        return sum;
+      }
+      const digits = sanitizeAmountInput(item.amount);
+      if (!digits) {
+        return sum;
+      }
+      return sum + Number(digits);
+    }, 0);
+  }, [items, selectedItemIds]);
 
   const handleFormChange = (field: keyof ExpenseFormState, value: string | undefined) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -139,29 +212,130 @@ const NewExpensePage = () => {
         prev.map((item) => (item.vendor.trim().length > 0 ? item : { ...item, vendor: value }))
       );
     }
-    if (field === "usageDate" && typeof value === "string") {
+    if (field === "siteId" && typeof value === "string") {
       setItems((prev) =>
-        prev.map((item) => (item.usageDate.trim().length > 0 ? item : { ...item, usageDate: value }))
+        prev.map((item) => (item.siteId ? item : { ...item, siteId: value || undefined }))
       );
+    }
+    if (field === "status" && typeof value === "string") {
+      const newStatus = value as ExpenseStatusValue;
+      setItems((prev) => prev.map((item) => ({ ...item, status: item.status ?? newStatus })));
     }
   };
 
-  const handleItemChange = (index: number, field: keyof ExpenseItemInput, value: string) => {
+  const handleItemChange = (itemId: string, field: keyof ExpenseItemInput, value: string) => {
     setItems((prev) =>
-      prev.map((item, itemIndex) => (itemIndex === index ? { ...item, [field]: value } : item))
+      prev.map((item) => {
+        if (item.id !== itemId) {
+          return item;
+        }
+        if (field === "siteId") {
+          return { ...item, siteId: value || undefined };
+        }
+        if (field === "status") {
+          return { ...item, status: (value as ExpenseStatusValue) ?? item.status };
+        }
+        return { ...item, [field]: value };
+      })
+    );
+  };
+
+  const handleAmountInput = (itemId: string, rawValue: string) => {
+    const digits = sanitizeAmountInput(rawValue);
+    setItems((prev) =>
+      prev.map((item) => (item.id === itemId ? { ...item, amount: digits } : item))
     );
   };
 
   const addItem = () => {
     const defaultCategory = categories[0]?.code ?? "";
-    setItems((prev) => [...prev, createEmptyItem(defaultCategory)]);
+    const vendorValue = form.vendor.trim();
+    const defaultSiteId = form.siteId ?? sites[0]?.id;
+    setItems((prev) => [
+      ...prev,
+      createEmptyItem(
+        defaultCategory,
+        vendorValue || undefined,
+        defaultSiteId,
+        form.status,
+        paymentMethodOptions[0]?.value
+      )
+    ]);
   };
 
-  const removeItem = (index: number) => {
-    setItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+  const toggleItemSelection = (itemId: string, checked: boolean) => {
+    setSelectedItemIds((prev) => {
+      if (checked) {
+        if (prev.includes(itemId)) {
+          return prev;
+        }
+        return [...prev, itemId];
+      }
+      return prev.filter((id) => id !== itemId);
+    });
   };
 
-  const validateForm = () => {
+  const toggleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedItemIds(items.map((item) => item.id));
+    } else {
+      setSelectedItemIds([]);
+    }
+  };
+
+  const duplicateSelectedItems = () => {
+    if (selectedItemIds.length === 0) {
+      setError("복제할 행을 먼저 선택해 주세요.");
+      return;
+    }
+    setItems((prev) => {
+      const selectedSet = new Set(selectedItemIds);
+      const duplicates = prev
+        .filter((item) => selectedSet.has(item.id))
+        .map((item) => ({
+          ...item,
+          id: makeItemId()
+        }));
+      return [...prev, ...duplicates];
+    });
+    setSelectedItemIds([]);
+    setSuccess("선택된 행을 복제했습니다.");
+  };
+
+  const removeSelectedItems = () => {
+    if (selectedItemIds.length === 0) {
+      setError("삭제할 행을 먼저 선택해 주세요.");
+      return;
+    }
+    setItems((prev) => prev.filter((item) => !selectedItemIds.includes(item.id)));
+    setSelectedItemIds([]);
+    setSuccess("선택된 행을 삭제했습니다.");
+  };
+
+  const resetTableRows = () => {
+    const defaultCategory = categories[0]?.code ?? "";
+    const vendorValue = form.vendor.trim();
+    const defaultSiteId = form.siteId ?? sites[0]?.id;
+    setItems([
+      createEmptyItem(
+        defaultCategory,
+        vendorValue || undefined,
+        defaultSiteId,
+        form.status,
+        paymentMethodOptions[0]?.value
+      )
+    ]);
+    setSelectedItemIds([]);
+    setSuccess("입력 행을 초기화했습니다.");
+    setError(null);
+  };
+
+  const removeItem = (itemId: string) => {
+    setItems((prev) => prev.filter((item) => item.id !== itemId));
+    setSelectedItemIds((prev) => prev.filter((id) => id !== itemId));
+  };
+
+  const validateForm = (itemsToValidate: ExpenseItemInput[], statusOverride?: ExpenseStatusValue) => {
     if (authLoading) {
       setError(null);
       return false;
@@ -175,95 +349,116 @@ const NewExpensePage = () => {
       setError("경비 작성 권한이 없습니다.");
       return false;
     }
-    if (!form.usageDate) {
-      setError("사용일을 입력해 주세요.");
-      return false;
-    }
-    if (!form.vendor.trim()) {
-      setError("지출처(거래처)를 입력해 주세요.");
-      return false;
-    }
-    if (!form.purposeDetail.trim()) {
-      setError("지출 사유를 입력해 주세요.");
-      return false;
-    }
-    if (sites.length > 0 && !form.siteId) {
-      setError("적용할 현장을 선택해 주세요.");
-      return false;
-    }
-    if (items.length === 0) {
+    if (itemsToValidate.length === 0) {
       setError("최소 1개 이상의 항목을 입력해 주세요.");
       return false;
     }
-    for (const item of items) {
+    const hasUsageDate = itemsToValidate.every((item) => item.usageDate && item.usageDate.trim().length > 0);
+    if (!hasUsageDate) {
+      setError("각 행의 사용일을 입력해 주세요.");
+      return false;
+    }
+    for (const item of itemsToValidate) {
       if (!item.category.trim()) {
         setError("항목의 분류를 입력해 주세요.");
         return false;
       }
-      if (!item.amount.trim() || Number.isNaN(Number(item.amount))) {
+      const amountDigits = sanitizeAmountInput(item.amount);
+      if (!amountDigits) {
         setError("항목 금액은 숫자로 입력해 주세요.");
         return false;
       }
-      if (!item.usageDate) {
-        setError("항목 사용일을 입력해 주세요.");
+      if (!item.vendor.trim()) {
+        setError("상호명을 입력해 주세요.");
+        return false;
+      }
+      if (!item.siteId) {
+        setError("행마다 현장을 선택해 주세요.");
+        return false;
+      }
+      if (!item.paymentMethod) {
+        setError("행마다 결제 수단을 선택해 주세요.");
+        return false;
+      }
+      const effectiveStatus = statusOverride ?? item.status;
+      if (!effectiveStatus) {
+        setError("행 상태를 선택해 주세요.");
         return false;
       }
     }
     return true;
   };
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const submitSelectedRows = async (statusOverride?: ExpenseStatusValue) => {
     setError(null);
     setSuccess(null);
-
-    if (!validateForm()) {
+    const rowsToSubmit = items.filter((item) => selectedItemIds.includes(item.id));
+    if (!validateForm(rowsToSubmit, statusOverride)) {
       return;
     }
 
-    const totalAmountValue = Number(totalAmount.toFixed(2));
-
-    const payload = {
-      status: form.status,
-      totalAmount: totalAmountValue,
-      usageDate: form.usageDate,
-      vendor: form.vendor.trim(),
-      purposeDetail: form.purposeDetail.trim(),
-      siteId: form.siteId,
-      items: items.map((item) => ({
-        category: item.category.trim(),
-        amount: Number(item.amount),
-        usageDate: item.usageDate,
-        vendor: item.vendor.trim() || form.vendor.trim(),
-        description: item.description.trim() ? item.description.trim() : undefined
-      }))
-    };
-
+    setSubmitting(true);
+    const defaultCategory = categories[0]?.code ?? "";
+    let processedCount = 0;
     try {
-      setSubmitting(true);
-      const created = await apiClient.post<{ id: string }>("/expenses", payload);
-
-      if (pendingAttachments.length > 0) {
-        const formData = new FormData();
-        pendingAttachments.forEach((file) => formData.append("files", file));
-        try {
-          await apiClient.upload(`/expenses/${created.id}/attachments`, formData);
-        } catch (uploadErr) {
-          setError(
-            uploadErr instanceof Error
-              ? uploadErr.message
-              : "첨부 파일 업로드 중 문제가 발생했습니다."
-          );
-          return;
+      for (const row of rowsToSubmit) {
+        const usageDate = row.usageDate;
+        const amountDigits = sanitizeAmountInput(row.amount);
+        const amountValue = amountDigits ? Number(amountDigits) : 0;
+        const vendorValue = row.vendor.trim() || form.vendor.trim();
+        const siteId = row.siteId ?? form.siteId ?? sites[0]?.id;
+        if (!siteId) {
+          setError("현장 정보가 없습니다. 기본 정보를 확인해 주세요.");
+          continue;
         }
+        const paymentLabel = getPaymentLabel(row.paymentMethod);
+        const basePurpose = buildPurposeDetail([row], vendorValue);
+        const purposeDetail = paymentLabel ? `${basePurpose} · 결제수단: ${paymentLabel}` : basePurpose;
+        const descriptionDetail = row.description.trim();
+        const combinedDescription = paymentLabel
+          ? descriptionDetail
+            ? `${descriptionDetail} (결제수단: ${paymentLabel})`
+            : `결제수단: ${paymentLabel}`
+          : descriptionDetail || undefined;
+        const payload = {
+          status: statusOverride ?? row.status ?? form.status,
+          totalAmount: Number(amountValue.toFixed(2)),
+          usageDate,
+          vendor: vendorValue,
+          purposeDetail,
+          siteId,
+          items: [
+            {
+              category: row.category.trim(),
+              paymentMethod: row.paymentMethod,
+              amount: amountValue,
+              usageDate,
+              vendor: vendorValue,
+              description: combinedDescription
+            }
+          ]
+        };
+        await apiClient.post<{ id: string }>("/expenses", payload);
+        processedCount += 1;
       }
-
-      setSuccess("경비가 저장되었습니다.");
-      setPendingAttachments([]);
-      setTimeout(() => {
-        router.push("/expenses").catch(() => undefined);
-      }, 800);
+      const actionLabel = statusOverride === "DRAFT" ? "임시 저장" : "제출";
+      setSuccess(`선택된 ${processedCount}개 행을 ${actionLabel}했습니다.`);
+      const fallbackVendor = form.vendor.trim() || "";
+      const defaultSiteId = form.siteId ?? sites[0]?.id;
+      setItems([
+        createEmptyItem(
+          defaultCategory,
+          fallbackVendor || undefined,
+          defaultSiteId,
+          form.status,
+          paymentMethodOptions[0]?.value
+        )
+      ]);
+      setSelectedItemIds([]);
     } catch (err) {
+      if (processedCount > 0) {
+        setSuccess(`이미 ${processedCount}개 행은 저장되었습니다.`);
+      }
       setError(err instanceof Error ? err.message : "경비 저장 중 문제가 발생했습니다.");
     } finally {
       setSubmitting(false);
@@ -276,216 +471,232 @@ const NewExpensePage = () => {
         <title>IKJIN EMS · 경비 작성</title>
       </Head>
       {metaLoading ? <p className="text-sm text-[#3E4C59]">경비 작성 정보를 불러오는 중...</p> : null}
-      <form className="space-y-8" onSubmit={handleSubmit}>
-        <section className="space-y-4 rounded-lg border border-[#E4E7EB] bg-white p-6 shadow-sm">
-          <h2 className="text-base font-semibold text-[#0F4C81]">기본 정보</h2>
-          <div className="grid gap-4 md:grid-cols-2">
-            {sites.length > 0 ? (
-              <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
-                <span>현장</span>
-                <select
-                  className="rounded-md border border-[#CBD2D9] px-3 py-2"
-                  value={form.siteId ?? ""}
-                  onChange={(event) => handleFormChange("siteId", event.target.value || undefined)}
-                  disabled={sites.length === 1}
-                >
-                  <option value="">현장을 선택하세요</option>
-                  {sites.map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.name ?? site.code}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
-              <span>사용일</span>
-              <input
-                className="rounded-md border border-[#CBD2D9] px-3 py-2"
-                type="date"
-                value={form.usageDate}
-                onChange={(event) => handleFormChange("usageDate", event.target.value)}
-                required
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
-              <span>지출처 (거래처)</span>
-              <input
-                className="rounded-md border border-[#CBD2D9] px-3 py-2"
-                type="text"
-                value={form.vendor}
-                onChange={(event) => handleFormChange("vendor", event.target.value)}
-                placeholder="예: ㈜익진엔지니어링"
-                required
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-sm text-[#3E4C59] md:col-span-2">
-              <span>지출 사유</span>
-              <textarea
-                className="min-h-[96px] rounded-md border border-[#CBD2D9] px-3 py-2"
-                value={form.purposeDetail}
-                onChange={(event) => handleFormChange("purposeDetail", event.target.value)}
-                placeholder="업무 관련 상세 내용을 입력해 주세요."
-                required
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-sm text-[#3E4C59] md:col-span-2">
-              <span>저장 방식</span>
-              <select
-                className="rounded-md border border-[#CBD2D9] px-3 py-2"
-                value={form.status}
-                onChange={(event) => handleFormChange("status", event.target.value)}
-              >
-                {statusOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </section>
-
-        <section className="space-y-4 rounded-lg border border-[#E4E7EB] bg-white p-6 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-[#0F4C81]">지출 항목</h2>
-            <div className="text-sm text-[#52606D]">
-              총 금액:{" "}
-              <span className="font-semibold text-[#0F4C81]">
-                {totalAmount.toLocaleString("ko-KR", { style: "currency", currency: "KRW" })}
-              </span>
-            </div>
-          </div>
-          <div className="space-y-6">
-            {items.map((item, index) => (
-              <div
-                key={`expense-item-${index}`}
-                className="space-y-4 rounded-md border border-[#E4E7EB] p-4"
-              >
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium text-[#0F4C81]">항목 #{index + 1}</p>
-                  {items.length > 1 ? (
-                    <button
-                      type="button"
-                      className="text-sm text-[#D64545] hover:underline"
-                      onClick={() => removeItem(index)}
-                    >
-                      삭제
-                    </button>
-                  ) : null}
+      <form
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submitSelectedRows();
+        }}
+      >
+        <section className="space-y-3 rounded-lg border border-[#E4E7EB] bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-semibold text-[#0F4C81]">경비 작성 리스트</h2>
+                  <p className="text-xs text-[#52606D]">
+                    행 단위로 사용일·금액·메모를 입력하고 선택한 행을 한 번에 제출합니다.
+                  </p>
                 </div>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
-                    <span>분류</span>
-                    <select
-                      className="rounded-md border border-[#CBD2D9] px-3 py-2"
-                      value={item.category}
-                      onChange={(event) => handleItemChange(index, "category", event.target.value)}
-                      required
-                    >
-                      <option value="">분류 선택</option>
-                      {categories.map((category) => (
-                        <option key={category.code} value={category.code}>
-                          {category.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
-                    <span>금액 (원)</span>
-                    <input
-                      className="rounded-md border border-[#CBD2D9] px-3 py-2"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={item.amount}
-                      onChange={(event) => handleItemChange(index, "amount", event.target.value)}
-                      required
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
-                    <span>사용일</span>
-                    <input
-                      className="rounded-md border border-[#CBD2D9] px-3 py-2"
-                      type="date"
-                      value={item.usageDate}
-                      onChange={(event) => handleItemChange(index, "usageDate", event.target.value)}
-                      required
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm text-[#3E4C59]">
-                    <span>지출처</span>
-                    <input
-                      className="rounded-md border border-[#CBD2D9] px-3 py-2"
-                      type="text"
-                      value={item.vendor}
-                      onChange={(event) => handleItemChange(index, "vendor", event.target.value)}
-                      placeholder="미입력 시 기본 지출처가 사용됩니다."
-                    />
-                  </label>
-                  <label className="md:col-span-2 flex flex-col gap-1 text-sm text-[#3E4C59]">
-                    <span>비고</span>
-                    <textarea
-                      className="min-h-[72px] rounded-md border border-[#CBD2D9] px-3 py-2"
-                      value={item.description}
-                      onChange={(event) =>
-                        handleItemChange(index, "description", event.target.value)
-                      }
-                      placeholder="추가 설명이 있으면 입력해 주세요."
-                    />
-                  </label>
+                <div className="space-y-1 text-right text-xs text-[#52606D]">
+                  <p>
+                    전체 금액{" "}
+                    <span className="font-semibold text-[#0F4C81]">
+                      {totalAmount.toLocaleString("ko-KR", { style: "currency", currency: "KRW" })}
+                    </span>
+                  </p>
+                  <p>
+                    선택 금액{" "}
+                    <span className="font-semibold text-[#0F4C81]">
+                      {selectedTotal.toLocaleString("ko-KR", {
+                        style: "currency",
+                        currency: "KRW"
+                      })}
+                    </span>{" "}
+                    · 선택 {selectedItemIds.length}건
+                  </p>
                 </div>
               </div>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="rounded-md border border-dashed border-[#0F4C81] px-4 py-2 text-sm font-medium text-[#0F4C81] transition hover:bg-[#0F4C8110]"
-            onClick={addItem}
-          >
-            항목 추가
-          </button>
-        </section>
-
-        <section className="space-y-4 rounded-lg border border-[#E4E7EB] bg-white p-6 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-base font-semibold text-[#0F4C81]">증빙 첨부</h2>
-            <p className="text-xs text-[#52606D]">최대 5개, 파일당 10MB 이하</p>
-          </div>
-          <label className="flex flex-col gap-2 text-sm text-[#3E4C59]">
-            <span>파일 선택</span>
-            <input
-              type="file"
-              multiple
-              onChange={handleAttachmentSelect}
-              className="rounded-md border border-dashed border-[#CBD2D9] px-3 py-2"
-            />
-          </label>
-          {pendingAttachments.length > 0 ? (
-            <ul className="space-y-2 text-sm text-[#3E4C59]">
-              {pendingAttachments.map((file, index) => (
-                <li
-                  key={`${file.name}-${index}`}
-                  className="flex items-center justify-between rounded-md border border-[#E4E7EB] px-3 py-2"
+              <div className="flex flex-wrap gap-2 text-xs">
+                <button
+                  type="button"
+                  className="rounded-md border border-[#CBD2D9] px-3 py-1.5 text-[#0F4C81] transition hover:bg-[#0F4C8110]"
+                  onClick={addItem}
+                  disabled={submitting}
                 >
-                  <div className="flex flex-col">
-                    <span className="font-medium text-[#0F4C81]">{file.name}</span>
-                    <span className="text-xs text-[#52606D]">{formatFileSize(file.size)}</span>
-                  </div>
-                  <button
-                    type="button"
-                    className="text-xs text-[#D64545] hover:underline"
-                    onClick={() => removePendingAttachment(index)}
-                  >
-                    삭제
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-[#52606D]">선택된 첨부 파일이 없습니다.</p>
-          )}
-        </section>
+                  행 추가
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[#CBD2D9] px-3 py-1.5 text-[#0F4C81] transition hover:bg-[#0F4C8110] disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={duplicateSelectedItems}
+                  disabled={submitting || selectedItemIds.length === 0}
+                >
+                  선택된 행 복제
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[#CBD2D9] px-3 py-1.5 text-[#D64545] transition hover:bg-[#FDECEC] disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={removeSelectedItems}
+                  disabled={submitting || selectedItemIds.length === 0}
+                >
+                  선택된 행 삭제
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[#CBD2D9] px-3 py-1.5 text-[#0F4C81] transition hover:bg-[#0F4C8110] disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => submitSelectedRows("DRAFT")}
+                  disabled={submitting || selectedItemIds.length === 0}
+                >
+                  선택된 행 임시저장
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md bg-[#0F4C81] px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-[#0c3b64] disabled:cursor-not-allowed disabled:bg-[#9AA5B1]"
+                  onClick={() => submitSelectedRows()}
+                  disabled={submitting || selectedItemIds.length === 0}
+                >
+                  선택된 행 제출
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[#CBD2D9] px-3 py-1.5 text-[#3E4C59] transition hover:bg-[#E4E7EB] disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={resetTableRows}
+                  disabled={submitting}
+                >
+                  새로고침
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full table-fixed text-xs text-[#3E4C59]">
+                  <thead className="bg-[#E4E7EB] text-[11px] uppercase text-[#52606D]">
+                    <tr>
+                      <th className="w-10 px-2 py-2 text-left">
+                        <input
+                          type="checkbox"
+                          checked={items.length > 0 && selectedItemIds.length === items.length}
+                          onChange={(event) => toggleSelectAll(event.target.checked)}
+                        />
+                      </th>
+                      <th className="w-28 px-2 py-2 text-left">날짜</th>
+                      <th className="w-40 px-2 py-2 text-left">현장</th>
+                      <th className="w-32 px-2 py-2 text-left">결제 수단</th>
+                      <th className="w-36 px-2 py-2 text-left">분류(계정)</th>
+                      <th className="w-32 px-2 py-2 text-left">상호명</th>
+                      <th className="w-28 px-2 py-2 text-right">금액</th>
+                      <th className="px-2 py-2 text-left">비고</th>
+                      <th className="w-16 px-2 py-2 text-center">관리</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item, index) => (
+                      <tr key={item.id} className="border-b border-[#E4E7EB] last:border-b-0">
+                        <td className="px-2 py-1">
+                          <input
+                            type="checkbox"
+                            checked={selectedItemIds.includes(item.id)}
+                            onChange={(event) => toggleItemSelection(item.id, event.target.checked)}
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            type="date"
+                            className="w-full rounded-md border border-[#CBD2D9] px-2 py-1 text-[13px]"
+                            value={item.usageDate}
+                            onChange={(event) =>
+                              handleItemChange(item.id, "usageDate", event.target.value)
+                            }
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <select
+                            className="w-full rounded-md border border-[#CBD2D9] px-2 py-1 text-[13px]"
+                            value={item.siteId ?? ""}
+                            onChange={(event) => handleItemChange(item.id, "siteId", event.target.value)}
+                          >
+                            <option value="">현장 선택</option>
+                            {sites.map((site) => (
+                              <option key={site.id} value={site.id}>
+                                {site.name ?? site.code}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1">
+                          <select
+                            className="w-full rounded-md border border-[#CBD2D9] px-2 py-1 text-[13px]"
+                            value={item.paymentMethod}
+                            onChange={(event) =>
+                              handleItemChange(
+                                item.id,
+                                "paymentMethod",
+                                event.target.value as PaymentMethodValue
+                              )
+                            }
+                          >
+                            {paymentMethodOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1">
+                          <select
+                            className="w-full rounded-md border border-[#CBD2D9] px-2 py-1 text-[13px]"
+                            value={item.category}
+                            onChange={(event) =>
+                              handleItemChange(item.id, "category", event.target.value)
+                            }
+                          >
+                            <option value="">분류 선택</option>
+                            {categories.map((category) => (
+                              <option key={category.code} value={category.code}>
+                                {category.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            type="text"
+                            className="w-full rounded-md border border-[#CBD2D9] px-2 py-1 text-[13px]"
+                            value={item.vendor}
+                            onChange={(event) =>
+                              handleItemChange(item.id, "vendor", event.target.value)
+                            }
+                            placeholder="상호명"
+                          />
+                        </td>
+                        <td className="px-2 py-1 text-right">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            className="w-full rounded-md border border-[#CBD2D9] px-2 py-1 text-right text-[13px]"
+                            value={formatAmountDisplay(item.amount)}
+                            onChange={(event) => handleAmountInput(item.id, event.target.value)}
+                            placeholder="₩0"
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            type="text"
+                            className="w-full rounded-md border border-[#CBD2D9] px-2 py-1 text-[13px]"
+                            value={item.description}
+                            onChange={(event) =>
+                              handleItemChange(item.id, "description", event.target.value)
+                            }
+                            placeholder="비고"
+                          />
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <button
+                            type="button"
+                            className="inline-flex items-center justify-center rounded-md border border-[#D64545] px-2 py-1 text-xs text-[#D64545] transition hover:bg-[#FDECEC] disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => removeItem(item.id)}
+                            disabled={submitting || (items.length === 1 && index === 0)}
+                          >
+                            삭제
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[11px] text-[#9AA5B1]">
+                선택된 행은 상단 버튼 또는 하단의 제출 버튼으로 저장됩니다. 저장된 후에는 경비 상세 화면에서
+                첨부와 추가 수정을 할 수 있습니다.
+              </p>
+            </section>
 
         {error ? <p className="text-sm text-[#D64545]">{error}</p> : null}
         {success ? <p className="text-sm text-[#0F4C81]">{success}</p> : null}
@@ -499,13 +710,13 @@ const NewExpensePage = () => {
           >
             목록으로
           </button>
-          <button
-            type="submit"
-            className="rounded-md bg-[#0F4C81] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#0c3b64] disabled:cursor-not-allowed disabled:bg-[#9AA5B1]"
-            disabled={submitting}
-          >
-            {form.status === "DRAFT" ? "임시 저장" : "경비 제출"}
-          </button>
+            <button
+              type="submit"
+              className="rounded-md bg-[#0F4C81] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#0c3b64] disabled:cursor-not-allowed disabled:bg-[#9AA5B1]"
+              disabled={submitting || selectedItemIds.length === 0}
+            >
+              선택된 행 제출
+            </button>
         </div>
       </form>
     </AppShell>

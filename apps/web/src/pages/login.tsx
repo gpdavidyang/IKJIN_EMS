@@ -1,4 +1,5 @@
 import Head from "next/head";
+import Image from "next/image";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/router";
 import { apiClient } from "@/lib/apiClient";
@@ -48,8 +49,11 @@ const LoginPage = () => {
       </Head>
       <main className="flex min-h-screen items-center justify-center bg-[#F8FAFC] px-4">
         <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-lg">
-          <h1 className="text-xl font-semibold text-[#0F4C81]">IKJIN EMS 로그인</h1>
-          <p className="mt-2 text-sm text-[#3E4C59]">사번 이메일과 비밀번호를 입력해 주세요.</p>
+          <div className="mb-6 flex justify-start">
+            <Image alt="익진엔지니어링 로고" height={21} src="/images/ikjin-logo.png" width={129} priority />
+          </div>
+          <h1 className="text-xl font-semibold text-[#0F4C81]">IKJIN Expense Management</h1>
+          <p className="mt-2 text-sm text-[#3E4C59]">이메일과 비밀번호를 입력해 주세요.</p>
           <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
             <div>
               <label className="text-sm text-[#3E4C59]" htmlFor="email">

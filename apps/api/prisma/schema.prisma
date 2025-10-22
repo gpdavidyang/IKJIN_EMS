@@ -13,10 +13,13 @@ model Site {
   id        String   @id @default(uuid())
   code      String   @unique
   name      String
+  address   String?
   region    String?
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  manager   User?    @relation("SiteManager", fields: [managerId], references: [id])
+  managerId String?
 
   users    User[]
   expenses Expense[]
@@ -36,6 +39,7 @@ model User {
   email          String    @unique
   passwordHash   String
   fullName       String
+  phone          String?   @db.VarChar(30)
   role           Role      @relation(fields: [roleId], references: [id])
   roleId         Int
   site           Site?     @relation(fields: [siteId], references: [id])
@@ -47,6 +51,7 @@ model User {
 
   expenses  Expense[]
   approvals Approval[] @relation("Approver")
+  managedSites Site[]  @relation("SiteManager")
   auditLogs AuditLog[]
 }
 
@@ -74,6 +79,7 @@ model ExpenseItem {
   expense     Expense  @relation(fields: [expenseId], references: [id])
   expenseId   String
   category    String
+  paymentMethod PaymentMethod @default(OTHER)
   amount      Decimal  @db.Decimal(12, 2)
   usageDate   DateTime
   vendor      String
@@ -137,4 +143,11 @@ enum ApprovalAction {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum PaymentMethod {
+  CORPORATE_CARD
+  PERSONAL_CARD
+  CASH
+  OTHER
 }

@@ -1,4 +1,5 @@
 import { ReactNode, useEffect } from "react";
+import Image from "next/image";
 import { useRouter } from "next/router";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -6,11 +7,12 @@ type UserRole = "submitter" | "site_manager" | "hq_admin" | "auditor";
 
 const NAV_LINKS: Array<{ href: string; label: string; roles: UserRole[] }> = [
   { href: "/dashboard", label: "대시보드", roles: ["submitter", "site_manager", "hq_admin", "auditor"] },
-  { href: "/expenses", label: "경비 내역", roles: ["submitter", "site_manager", "hq_admin", "auditor"] },
+  { href: "/expenses/new", label: "경비 작성", roles: ["submitter", "site_manager", "hq_admin"] },
+  { href: "/expenses", label: "경비 신청 현황", roles: ["submitter", "site_manager", "hq_admin", "auditor"] },
   { href: "/approvals", label: "승인 대기", roles: ["site_manager", "hq_admin"] },
-  { href: "/account/password", label: "비밀번호 변경", roles: ["submitter", "site_manager", "hq_admin", "auditor"] },
   { href: "/admin/sites", label: "현장 관리", roles: ["hq_admin"] },
-  { href: "/admin/users", label: "사용자 관리", roles: ["hq_admin"] }
+  { href: "/admin/users", label: "사용자 관리", roles: ["hq_admin"] },
+  { href: "/account/password", label: "비밀번호 변경", roles: ["submitter", "site_manager", "hq_admin", "auditor"] }
 ];
 
 interface AppShellProps {
@@ -32,8 +34,16 @@ const AppShell = ({ children, title }: AppShellProps) => {
     <div className="flex min-h-screen bg-[#F8FAFC] text-[#1F2933]">
       <aside className="hidden w-64 flex-col border-r border-[#E4E7EB] bg-white lg:flex">
         <div className="border-b border-[#E4E7EB] px-6 py-4">
-          <p className="text-sm font-medium text-[#0F4C81]">IKJIN EMS</p>
-          <p className="mt-1 text-xs text-[#3E4C59]">익진엔지니어링 경비 관리</p>
+          <div className="flex items-center gap-3">
+            <Image
+              src="/images/ikjin-logo.png"
+              alt="익진엔지니어링"
+              width={164}
+              height={26}
+              priority
+            />
+          </div>
+          <p className="mt-3 text-xs text-[#3E4C59]">익진엔지니어링 경비 관리 시스템</p>
         </div>
         <nav className="flex-1 px-4 py-6 text-sm">
           <ul className="space-y-2">
@@ -82,10 +92,10 @@ export default AppShell;
 
 function translateRole(role: string) {
   const map: Record<string, string> = {
-    submitter: "Submitter",
-    site_manager: "Site Manager",
-    hq_admin: "HQ Admin",
-    auditor: "Auditor"
+    submitter: "현장실무자",
+    site_manager: "현장관리자",
+    hq_admin: "본사관리자",
+    auditor: "재무관리자"
   };
   return map[role] ?? role;
 }

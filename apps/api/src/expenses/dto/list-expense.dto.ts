@@ -28,4 +28,16 @@ export class ListExpenseDto {
   @Type(() => Number)
   @IsNumber()
   amountMax?: number;
+
+  @IsOptional()
+  @IsString()
+  category?: string;
+
+  @IsOptional()
+  @IsString()
+  userId?: string;
+
+  @IsOptional()
+  @IsString()
+  keyword?: string;
 }
