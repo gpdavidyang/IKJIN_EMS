@@ -39,7 +39,7 @@ const ActivityTable = ({ rows }: ActivityTableProps) => {
             <th className="w-[16%] px-3 py-3 whitespace-nowrap">비고</th>
             <th className="w-[14%] px-3 py-3 whitespace-nowrap">소장 코멘트</th>
             <th className="w-[14%] px-3 py-3 whitespace-nowrap">본사 코멘트</th>
-            <th className="w-[7%] px-3 py-3 text-center whitespace-nowrap">상세</th>
+            <th className="w-[7%] px-3 py-3 text-center whitespace-nowrap">액션</th>
           </tr>
         </thead>
         <tbody>
@@ -64,7 +64,7 @@ const ActivityTable = ({ rows }: ActivityTableProps) => {
                     className="inline-flex items-center justify-center rounded-md border border-[#0F4C81] px-2 py-1 text-xs text-[#0F4C81] transition hover:bg-[#0F4C8110]"
                     href={`/expenses/${row.id}`}
                   >
-                    보기
+                    상세
                   </Link>
                   {row.canEdit ? (
                     <Link

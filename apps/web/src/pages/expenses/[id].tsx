@@ -101,10 +101,12 @@ const translateCategoryCode = (code: string): string => CATEGORY_LABELS[code] ??
 const findApprovalByStep = (approvals: ExpenseApprovalItem[], step: number) =>
   approvals.find((approval) => approval.step === step);
 
+const EDITABLE_STATUSES = ["DRAFT", "PENDING_SITE", "PENDING_HQ", "REJECTED_SITE", "REJECTED_HQ"];
+
 const ExpenseDetailPage = () => {
   const router = useRouter();
   const { id } = router.query;
-  const { loading: authLoading, token } = useAuth();
+  const { loading: authLoading, token, user } = useAuth();
   const [expense, setExpense] = useState<ExpenseDetailResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -120,6 +122,9 @@ const ExpenseDetailPage = () => {
     [expense]
   );
   const submittedDate = useMemo(() => (expense ? formatDate(expense.updatedAt) : "-"), [expense]);
+
+  const showEditButton =
+    !!expense && !!user && user.role === "submitter" && expense.user.id === user.id && EDITABLE_STATUSES.includes(expense.status);
 
   useEffect(() => {
     if (!router.isReady || authLoading) return;
@@ -177,7 +182,7 @@ const ExpenseDetailPage = () => {
                 >
                   목록으로
                 </Link>
-                {expense.permissions.canEdit ? (
+                {showEditButton ? (
                   <button
                     className="rounded-md bg-[#0F4C81] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#0c3b64]"
                     onClick={handleEdit}

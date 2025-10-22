@@ -573,7 +573,7 @@ const NewExpensePage = () => {
                       <th className="w-32 px-2 py-2 text-left">상호명</th>
                       <th className="w-28 px-2 py-2 text-right">금액</th>
                       <th className="px-2 py-2 text-left">비고</th>
-                      <th className="w-16 px-2 py-2 text-center">관리</th>
+                      <th className="w-16 px-2 py-2 text-center">액션</th>
                     </tr>
                   </thead>
                   <tbody>

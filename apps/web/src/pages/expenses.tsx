@@ -15,7 +15,7 @@ import {
   translateStatus
 } from "@/lib/expensePresenters";
 
-const EDITABLE_STATUSES = ["DRAFT", "PENDING_SITE", "REJECTED_SITE", "REJECTED_HQ"];
+const EDITABLE_STATUSES = ["DRAFT", "PENDING_SITE", "PENDING_HQ", "REJECTED_SITE", "REJECTED_HQ"];
 
 interface ExpenseRow {
   id: string;
@@ -471,14 +471,9 @@ const ExpensesPage = () => {
                         >
                           상세
                         </Link>
-                        {(() => {
-                          const serverCanEdit = row.permissions?.canEdit ?? false;
-                          const clientCanEdit =
-                            user?.role === "submitter" &&
-                            row.userId === user?.id &&
-                            EDITABLE_STATUSES.includes(row.statusCode);
-                          return serverCanEdit || clientCanEdit;
-                        })() ? (
+                        {user?.role === "submitter" &&
+                        row.userId === user?.id &&
+                        EDITABLE_STATUSES.includes(row.statusCode) ? (
                           <Link
                             className="rounded-md border border-[#0F4C81] px-2 py-1 text-xs text-[#0F4C81] transition hover:bg-[#0F4C8110]"
                             href={`/expenses/${row.id}/edit`}
