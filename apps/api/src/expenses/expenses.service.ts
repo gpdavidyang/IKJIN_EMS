@@ -85,6 +85,7 @@ export class ExpensesService {
   private readonly editableStatuses: ExpenseStatus[] = [
     ExpenseStatus.DRAFT,
     ExpenseStatus.PENDING_SITE,
+    ExpenseStatus.PENDING_HQ,
     ExpenseStatus.REJECTED_SITE,
     ExpenseStatus.REJECTED_HQ
   ];
