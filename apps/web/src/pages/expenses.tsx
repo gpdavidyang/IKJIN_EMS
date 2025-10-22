@@ -7,6 +7,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import StatusBadge from "@/components/StatusBadge";
 import {
   STATUS_OPTIONS,
+  EDITABLE_STATUS_VALUES,
+  EDITABLE_ROLE_VALUES,
   buildCategoryLabel,
   buildMemoFromItems,
   buildPaymentMethodLabel,
@@ -15,7 +17,8 @@ import {
   translateStatus
 } from "@/lib/expensePresenters";
 
-const EDITABLE_STATUSES = ["DRAFT", "PENDING_SITE", "PENDING_HQ", "REJECTED_SITE", "REJECTED_HQ"];
+const EDITABLE_STATUS_SET = new Set(EDITABLE_STATUS_VALUES);
+const EDITABLE_ROLE_SET = new Set(EDITABLE_ROLE_VALUES);
 
 interface ExpenseRow {
   id: string;
@@ -471,9 +474,14 @@ const ExpensesPage = () => {
                         >
                           상세
                         </Link>
-                        {user?.role === "submitter" &&
-                        row.userId === user?.id &&
-                        EDITABLE_STATUSES.includes(row.statusCode) ? (
+                        {(() => {
+                          const serverCanEdit = row.permissions?.canEdit ?? false;
+                          const clientCanEdit =
+                            !!user &&
+                            row.userId === user.id &&
+                            EDITABLE_STATUS_SET.has(row.statusCode);
+                          return serverCanEdit || clientCanEdit;
+                        })() ? (
                           <Link
                             className="rounded-md border border-[#0F4C81] px-2 py-1 text-xs text-[#0F4C81] transition hover:bg-[#0F4C8110]"
                             href={`/expenses/${row.id}/edit`}

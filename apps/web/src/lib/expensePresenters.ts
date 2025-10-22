@@ -26,6 +26,9 @@ const STATUS_OPTIONS = [
   { value: "APPROVED", label: "승인완료" }
 ];
 
+const EDITABLE_STATUS_VALUES = ["DRAFT", "PENDING_SITE", "PENDING_HQ", "REJECTED_SITE", "REJECTED_HQ"];
+const EDITABLE_ROLE_VALUES = ["submitter", "site_manager", "hq_admin"];
+
 const translateStatus = (status: string) => {
   const map: Record<string, string> = STATUS_OPTIONS.reduce<Record<string, string>>((acc, option) => {
     acc[option.value] = option.label;
@@ -96,6 +99,8 @@ export {
   CATEGORY_LABELS,
   PAYMENT_METHOD_LABELS,
   STATUS_OPTIONS,
+  EDITABLE_STATUS_VALUES,
+  EDITABLE_ROLE_VALUES,
   buildCategoryLabel,
   buildMemoFromItems,
   buildPaymentMethodLabel,

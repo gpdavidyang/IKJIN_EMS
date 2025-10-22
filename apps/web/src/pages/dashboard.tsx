@@ -12,8 +12,13 @@ import {
   buildPaymentMethodLabel,
   formatCurrency,
   formatDate,
-  translateStatus
+  translateStatus,
+  EDITABLE_STATUS_VALUES,
+  EDITABLE_ROLE_VALUES
 } from "@/lib/expensePresenters";
+
+const EDITABLE_STATUS_SET = new Set(EDITABLE_STATUS_VALUES);
+const EDITABLE_ROLE_SET = new Set(EDITABLE_ROLE_VALUES);
 
 interface DashboardMetrics {
   approvalRate: number;
@@ -100,10 +105,10 @@ const DashboardPage = () => {
         const managerApproval = findApprovalByStep(item.approvals ?? [], 1);
         const hqApproval = findApprovalByStep(item.approvals ?? [], 2);
         const canEdit =
-          user?.role === "submitter" &&
+          !!user &&
           Boolean(user.id) &&
           user.id === item.userId &&
-          EDITABLE_STATUSES.has(item.status);
+          EDITABLE_STATUS_SET.has(item.status);
 
         return {
           id: item.id,

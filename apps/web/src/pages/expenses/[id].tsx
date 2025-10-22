@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import AppShell from "@/layout/AppShell";
 import { apiClient } from "@/lib/apiClient";
 import { useAuth } from "@/contexts/AuthContext";
+import { EDITABLE_ROLE_VALUES, EDITABLE_STATUS_VALUES } from "@/lib/expensePresenters";
 
 interface ExpenseDetailItem {
   id: string;
@@ -101,7 +102,8 @@ const translateCategoryCode = (code: string): string => CATEGORY_LABELS[code] ??
 const findApprovalByStep = (approvals: ExpenseApprovalItem[], step: number) =>
   approvals.find((approval) => approval.step === step);
 
-const EDITABLE_STATUSES = ["DRAFT", "PENDING_SITE", "PENDING_HQ", "REJECTED_SITE", "REJECTED_HQ"];
+const EDITABLE_STATUS_SET = new Set(EDITABLE_STATUS_VALUES);
+const EDITABLE_ROLE_SET = new Set(EDITABLE_ROLE_VALUES);
 
 const ExpenseDetailPage = () => {
   const router = useRouter();
@@ -124,7 +126,10 @@ const ExpenseDetailPage = () => {
   const submittedDate = useMemo(() => (expense ? formatDate(expense.updatedAt) : "-"), [expense]);
 
   const showEditButton =
-    !!expense && !!user && user.role === "submitter" && expense.user.id === user.id && EDITABLE_STATUSES.includes(expense.status);
+    !!expense &&
+    !!user &&
+    (expense.permissions.canEdit ||
+      (expense.user.id === user.id && EDITABLE_STATUS_SET.has(expense.status)));
 
   useEffect(() => {
     if (!router.isReady || authLoading) return;

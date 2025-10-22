@@ -167,14 +167,14 @@ export class ExpensesService {
     });
 
     return expenses.map((expense) => {
+      const isOwner = expense.userId === user.id;
       const canEdit =
-        user.role === "submitter" &&
-        this.editableStatuses.includes(expense.status) &&
-        expense.userId === user.id;
+        isOwner &&
+        ((user.role === "submitter" && this.editableStatuses.includes(expense.status)) ||
+          ((user.role === "site_manager" || user.role === "hq_admin") &&
+            this.editableStatuses.includes(expense.status)));
       const canResubmit =
-        user.role === "submitter" &&
-        this.resubmittableStatuses.includes(expense.status) &&
-        expense.userId === user.id;
+        user.role === "submitter" && isOwner && this.resubmittableStatuses.includes(expense.status);
 
       return {
         ...expense,
@@ -951,13 +951,26 @@ export class ExpensesService {
   }
 
   private ensureEditable(user: AuthenticatedUser, expense: { userId: string; status: ExpenseStatus }) {
-    if (user.role !== "submitter" || expense.userId !== user.id) {
-      throw new ForbiddenException("경비를 수정할 권한이 없습니다.");
+    const isOwner = expense.userId === user.id;
+
+    if (user.role === "submitter") {
+      if (!isOwner) {
+        throw new ForbiddenException("경비를 수정할 권한이 없습니다.");
+      }
+      if (!this.editableStatuses.includes(expense.status)) {
+        throw new BadRequestException("현재 상태에서는 경비를 수정할 수 없습니다.");
+      }
+      return;
     }
 
-    if (!this.editableStatuses.includes(expense.status)) {
-      throw new BadRequestException("현재 상태에서는 경비를 수정할 수 없습니다.");
+    if ((user.role === "site_manager" || user.role === "hq_admin") && isOwner) {
+      if (!this.editableStatuses.includes(expense.status)) {
+        throw new BadRequestException("현재 상태에서는 경비를 수정할 수 없습니다.");
+      }
+      return;
     }
+
+    throw new ForbiddenException("경비를 수정할 권한이 없습니다.");
   }
 
   private toAttachmentResponse(attachment: {
@@ -977,10 +990,22 @@ export class ExpensesService {
   }
 
   private toExpenseResponse(expense: ExpenseWithRelations, user: AuthenticatedUser) {
-    const canEdit =
-      user.role === "submitter" && this.editableStatuses.includes(expense.status) && expense.userId === user.id;
+    const isOwner = expense.userId === user.id;
+    const canEdit = (() => {
+      if (!isOwner) {
+        return false;
+      }
+      if (user.role === "submitter") {
+        return this.editableStatuses.includes(expense.status);
+      }
+      if (user.role === "site_manager" || user.role === "hq_admin") {
+        return this.editableStatuses.includes(expense.status);
+      }
+      return false;
+    })();
+
     const canResubmit =
-      user.role === "submitter" && this.resubmittableStatuses.includes(expense.status) && expense.userId === user.id;
+      user.role === "submitter" && isOwner && this.resubmittableStatuses.includes(expense.status);
 
     return {
       id: expense.id,
