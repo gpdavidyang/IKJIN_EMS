@@ -84,6 +84,7 @@ export class ExpensesService {
 
   private readonly editableStatuses: ExpenseStatus[] = [
     ExpenseStatus.DRAFT,
+    ExpenseStatus.PENDING_SITE,
     ExpenseStatus.REJECTED_SITE,
     ExpenseStatus.REJECTED_HQ
   ];
@@ -137,7 +138,7 @@ export class ExpensesService {
   async findAll(user: AuthenticatedUser, query: ListExpenseDto) {
     const filters = this.buildFilters(user, query);
 
-    return this.prisma.expense.findMany({
+    const expenses = await this.prisma.expense.findMany({
       where: filters,
       include: {
         site: true,
@@ -162,6 +163,25 @@ export class ExpensesService {
       orderBy: {
         updatedAt: "desc"
       }
+    });
+
+    return expenses.map((expense) => {
+      const canEdit =
+        user.role === "submitter" &&
+        this.editableStatuses.includes(expense.status) &&
+        expense.userId === user.id;
+      const canResubmit =
+        user.role === "submitter" &&
+        this.resubmittableStatuses.includes(expense.status) &&
+        expense.userId === user.id;
+
+      return {
+        ...expense,
+        permissions: {
+          canEdit,
+          canResubmit
+        }
+      };
     });
   }
 

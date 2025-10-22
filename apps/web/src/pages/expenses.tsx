@@ -15,7 +15,7 @@ import {
   translateStatus
 } from "@/lib/expensePresenters";
 
-const EDITABLE_STATUSES = ["DRAFT", "REJECTED_SITE", "REJECTED_HQ"];
+const EDITABLE_STATUSES = ["DRAFT", "PENDING_SITE", "REJECTED_SITE", "REJECTED_HQ"];
 
 interface ExpenseRow {
   id: string;
@@ -34,6 +34,10 @@ interface ExpenseRow {
   memo: string;
   managerComment: string;
   hqComment: string;
+  permissions?: {
+    canEdit: boolean;
+    canResubmit: boolean;
+  };
 }
 
 interface CategoryOption {
@@ -227,7 +231,11 @@ const ExpensesPage = () => {
                   : "-";
               })(),
               managerComment: findApprovalByStep(item.approvals, 1)?.comment ?? "-",
-              hqComment: findApprovalByStep(item.approvals, 2)?.comment ?? "-"
+              hqComment: findApprovalByStep(item.approvals, 2)?.comment ?? "-",
+              permissions: {
+                canEdit: Boolean(item.permissions?.canEdit),
+                canResubmit: Boolean(item.permissions?.canResubmit)
+              }
             } satisfies ExpenseRow;
           })
         );
@@ -436,7 +444,7 @@ const ExpensesPage = () => {
                   <th className="w-[16%] px-3 py-3 whitespace-nowrap">비고</th>
                   <th className="w-[14%] px-3 py-3 whitespace-nowrap">소장 코멘트</th>
                   <th className="w-[14%] px-3 py-3 whitespace-nowrap">본사 코멘트</th>
-                  <th className="w-[7%] px-3 py-3 text-center whitespace-nowrap">상세</th>
+                  <th className="w-[7%] px-3 py-3 text-center whitespace-nowrap">액션</th>
                 </tr>
               </thead>
               <tbody>
@@ -461,11 +469,16 @@ const ExpensesPage = () => {
                           className="rounded-md border border-[#0F4C81] px-2 py-1 text-xs text-[#0F4C81] transition hover:bg-[#0F4C8110]"
                           href={`/expenses/${row.id}`}
                         >
-                          보기
+                          상세
                         </Link>
-                        {user?.role === "submitter" &&
-                        row.userId === user.id &&
-                        EDITABLE_STATUSES.includes(row.statusCode) ? (
+                        {(() => {
+                          const serverCanEdit = row.permissions?.canEdit ?? false;
+                          const clientCanEdit =
+                            user?.role === "submitter" &&
+                            row.userId === user?.id &&
+                            EDITABLE_STATUSES.includes(row.statusCode);
+                          return serverCanEdit || clientCanEdit;
+                        })() ? (
                           <Link
                             className="rounded-md border border-[#0F4C81] px-2 py-1 text-xs text-[#0F4C81] transition hover:bg-[#0F4C8110]"
                             href={`/expenses/${row.id}/edit`}
