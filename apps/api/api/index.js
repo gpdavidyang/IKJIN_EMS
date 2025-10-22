@@ -1,3 +1,3 @@
-const server = require("../dist/serverless.js");
+const serverModule = require("../dist/serverless.js");
 
-module.exports = server;
+module.exports = serverModule.default || serverModule;
