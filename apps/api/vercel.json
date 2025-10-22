@@ -1,4 +1,11 @@
 {
-  "buildCommand": "pnpm install && pnpm --filter @ikjin/api build && pnpm --filter @ikjin/api prisma migrate deploy",
-  "installCommand": "pnpm install"
+  "installCommand": "pnpm install",
+  "buildCommand": "pnpm --filter @ikjin/api build",
+  "functions": {
+    "api/index.js": {
+      "runtime": "nodejs20.x",
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  }
 }
