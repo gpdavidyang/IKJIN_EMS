@@ -14,8 +14,8 @@
     "schema": "apps/api/prisma/schema.prisma"
   },
   "engines": {
-    "node": ">=20.0.0",
-    "pnpm": ">=8.0.0"
+    "node": "20.x",
+    "pnpm": "8.x"
   },
   "dependencies": {
     "@prisma/client": "5.22.0"
